@@ -99,6 +99,7 @@ export function BoardView() {
     runningAutoTasks,
     maxConcurrency,
     setMaxConcurrency,
+    defaultSkipTests,
   } = useAppStore();
   const [activeFeature, setActiveFeature] = useState<Feature | null>(null);
   const [editingFeature, setEditingFeature] = useState<Feature | null>(null);
@@ -330,6 +331,16 @@ export function BoardView() {
     },
     [currentProject, persistedCategories]
   );
+
+  // Sync skipTests default when dialog opens
+  useEffect(() => {
+    if (showAddDialog) {
+      setNewFeature((prev) => ({
+        ...prev,
+        skipTests: defaultSkipTests,
+      }));
+    }
+  }, [showAddDialog, defaultSkipTests]);
 
   // Auto-show activity log when auto mode starts
   useEffect(() => {
@@ -602,7 +613,7 @@ export function BoardView() {
       steps: [""],
       images: [],
       imagePaths: [],
-      skipTests: false,
+      skipTests: defaultSkipTests,
     });
     setShowAddDialog(false);
   };
@@ -1341,18 +1352,6 @@ export function BoardView() {
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="category">Category</Label>
-              <CategoryAutocomplete
-                value={newFeature.category}
-                onChange={(value) =>
-                  setNewFeature({ ...newFeature, category: value })
-                }
-                suggestions={categorySuggestions}
-                placeholder="e.g., Core, UI, API"
-                data-testid="feature-category-input"
-              />
-            </div>
-            <div className="space-y-2">
               <Label htmlFor="description">Description</Label>
               <DescriptionImageDropZone
                 value={newFeature.description}
@@ -1367,34 +1366,16 @@ export function BoardView() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Steps</Label>
-              {newFeature.steps.map((step, index) => (
-                <Input
-                  key={index}
-                  placeholder={`Step ${index + 1}`}
-                  value={step}
-                  onChange={(e) => {
-                    const steps = [...newFeature.steps];
-                    steps[index] = e.target.value;
-                    setNewFeature({ ...newFeature, steps });
-                  }}
-                  data-testid={`feature-step-${index}-input`}
-                />
-              ))}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  setNewFeature({
-                    ...newFeature,
-                    steps: [...newFeature.steps, ""],
-                  })
+              <Label htmlFor="category">Category (optional)</Label>
+              <CategoryAutocomplete
+                value={newFeature.category}
+                onChange={(value) =>
+                  setNewFeature({ ...newFeature, category: value })
                 }
-                data-testid="add-step-button"
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Add Step
-              </Button>
+                suggestions={categorySuggestions}
+                placeholder="e.g., Core, UI, API"
+                data-testid="feature-category-input"
+              />
             </div>
             <div className="flex items-center space-x-2">
               <Checkbox
@@ -1416,6 +1397,38 @@ export function BoardView() {
               When enabled, this feature will require manual verification
               instead of automated TDD.
             </p>
+            {newFeature.skipTests && (
+              <div className="space-y-2">
+                <Label>Verification Steps</Label>
+                {newFeature.steps.map((step, index) => (
+                  <Input
+                    key={index}
+                    placeholder={`Verification step ${index + 1}`}
+                    value={step}
+                    onChange={(e) => {
+                      const steps = [...newFeature.steps];
+                      steps[index] = e.target.value;
+                      setNewFeature({ ...newFeature, steps });
+                    }}
+                    data-testid={`feature-step-${index}-input`}
+                  />
+                ))}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setNewFeature({
+                      ...newFeature,
+                      steps: [...newFeature.steps, ""],
+                    })
+                  }
+                  data-testid="add-step-button"
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Verification Step
+                </Button>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setShowAddDialog(false)}>
@@ -1451,21 +1464,6 @@ export function BoardView() {
           {editingFeature && (
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <Label htmlFor="edit-category">Category</Label>
-                <CategoryAutocomplete
-                  value={editingFeature.category}
-                  onChange={(value) =>
-                    setEditingFeature({
-                      ...editingFeature,
-                      category: value,
-                    })
-                  }
-                  suggestions={categorySuggestions}
-                  placeholder="e.g., Core, UI, API"
-                  data-testid="edit-feature-category"
-                />
-              </div>
-              <div className="space-y-2">
                 <Label htmlFor="edit-description">Description</Label>
                 <Textarea
                   id="edit-description"
@@ -1481,32 +1479,19 @@ export function BoardView() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Steps</Label>
-                {editingFeature.steps.map((step, index) => (
-                  <Input
-                    key={index}
-                    value={step}
-                    onChange={(e) => {
-                      const steps = [...editingFeature.steps];
-                      steps[index] = e.target.value;
-                      setEditingFeature({ ...editingFeature, steps });
-                    }}
-                    data-testid={`edit-feature-step-${index}`}
-                  />
-                ))}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
+                <Label htmlFor="edit-category">Category (optional)</Label>
+                <CategoryAutocomplete
+                  value={editingFeature.category}
+                  onChange={(value) =>
                     setEditingFeature({
                       ...editingFeature,
-                      steps: [...editingFeature.steps, ""],
+                      category: value,
                     })
                   }
-                >
-                  <Plus className="w-4 h-4 mr-2" />
-                  Add Step
-                </Button>
+                  suggestions={categorySuggestions}
+                  placeholder="e.g., Core, UI, API"
+                  data-testid="edit-feature-category"
+                />
               </div>
               <div className="flex items-center space-x-2">
                 <Checkbox
@@ -1534,6 +1519,37 @@ export function BoardView() {
                 When enabled, this feature will require manual verification
                 instead of automated TDD.
               </p>
+              {editingFeature.skipTests && (
+                <div className="space-y-2">
+                  <Label>Verification Steps</Label>
+                  {editingFeature.steps.map((step, index) => (
+                    <Input
+                      key={index}
+                      value={step}
+                      placeholder={`Verification step ${index + 1}`}
+                      onChange={(e) => {
+                        const steps = [...editingFeature.steps];
+                        steps[index] = e.target.value;
+                        setEditingFeature({ ...editingFeature, steps });
+                      }}
+                      data-testid={`edit-feature-step-${index}`}
+                    />
+                  ))}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setEditingFeature({
+                        ...editingFeature,
+                        steps: [...editingFeature.steps, ""],
+                      })
+                    }
+                  >
+                    <Plus className="w-4 h-4 mr-2" />
+                    Add Verification Step
+                  </Button>
+                </div>
+              )}
             </div>
           )}
           <DialogFooter>

@@ -58,6 +58,16 @@ Features can ONLY be marked as passing (change "passes": false to "passes": true
 Never remove features, never edit descriptions, never modify testing steps.
 This ensures no functionality is missed.
 
+**🚨 CRITICAL: AFTER CREATING .automaker/feature_list.json 🚨**
+Once you create this file in this session, you MUST NEVER directly modify it again.
+In all future sessions, feature_list.json is COMPLETELY OFF-LIMITS for:
+- Write tool
+- Edit tool
+- Any bash commands (echo, sed, awk, etc.)
+- Any form of direct file modification
+
+The ONLY way to update features is through the UpdateFeatureStatus MCP tool.
+
 ### SECOND TASK: Create init.sh
 
 Create a script called `init.sh` that future agents can use to quickly

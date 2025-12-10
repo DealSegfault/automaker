@@ -125,6 +125,9 @@ export interface AppState {
 
   // Kanban Card Display Settings
   kanbanCardDetailLevel: KanbanCardDetailLevel; // Level of detail shown on kanban cards
+
+  // Feature Default Settings
+  defaultSkipTests: boolean; // Default value for skip tests when creating new features
 }
 
 export interface AutoModeActivity {
@@ -202,6 +205,9 @@ export interface AppActions {
   // Kanban Card Settings actions
   setKanbanCardDetailLevel: (level: KanbanCardDetailLevel) => void;
 
+  // Feature Default Settings actions
+  setDefaultSkipTests: (skip: boolean) => void;
+
   // Reset
   reset: () => void;
 }
@@ -227,6 +233,7 @@ const initialState: AppState = {
   autoModeActivityLog: [],
   maxConcurrency: 3, // Default to 3 concurrent agents
   kanbanCardDetailLevel: "standard", // Default to standard detail level
+  defaultSkipTests: false, // Default to TDD mode (tests enabled)
 };
 
 export const useAppStore = create<AppState & AppActions>()(
@@ -469,6 +476,9 @@ export const useAppStore = create<AppState & AppActions>()(
       setKanbanCardDetailLevel: (level) =>
         set({ kanbanCardDetailLevel: level }),
 
+      // Feature Default Settings actions
+      setDefaultSkipTests: (skip) => set({ defaultSkipTests: skip }),
+
       // Reset
       reset: () => set(initialState),
     }),
@@ -485,6 +495,7 @@ export const useAppStore = create<AppState & AppActions>()(
         chatHistoryOpen: state.chatHistoryOpen,
         maxConcurrency: state.maxConcurrency,
         kanbanCardDetailLevel: state.kanbanCardDetailLevel,
+        defaultSkipTests: state.defaultSkipTests,
       }),
     }
   )

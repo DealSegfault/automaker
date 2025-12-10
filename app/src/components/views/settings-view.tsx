@@ -31,7 +31,9 @@ import {
   Minimize2,
   Square,
   Maximize2,
+  FlaskConical,
 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 
 export function SettingsView() {
   const {
@@ -42,6 +44,8 @@ export function SettingsView() {
     setTheme,
     kanbanCardDetailLevel,
     setKanbanCardDetailLevel,
+    defaultSkipTests,
+    setDefaultSkipTests,
   } = useAppStore();
   const [anthropicKey, setAnthropicKey] = useState(apiKeys.anthropic);
   const [googleKey, setGoogleKey] = useState(apiKeys.google);
@@ -623,6 +627,49 @@ export function SettingsView() {
                   <strong>Detailed:</strong> Shows all info including model,
                   tool calls, task list, and summaries
                 </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Feature Defaults Section */}
+          <div className="rounded-xl border border-border bg-card backdrop-blur-md overflow-hidden">
+            <div className="p-6 border-b border-border">
+              <div className="flex items-center gap-2 mb-2">
+                <FlaskConical className="w-5 h-5 text-brand-500" />
+                <h2 className="text-lg font-semibold text-foreground">
+                  Feature Defaults
+                </h2>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Configure default settings for new features.
+              </p>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="space-y-3">
+                <div className="flex items-start space-x-3">
+                  <Checkbox
+                    id="default-skip-tests"
+                    checked={defaultSkipTests}
+                    onCheckedChange={(checked) =>
+                      setDefaultSkipTests(checked === true)
+                    }
+                    className="mt-0.5"
+                    data-testid="default-skip-tests-checkbox"
+                  />
+                  <div className="space-y-1">
+                    <Label
+                      htmlFor="default-skip-tests"
+                      className="text-foreground cursor-pointer font-medium"
+                    >
+                      Skip automated testing by default
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      When enabled, new features will default to manual
+                      verification instead of TDD (test-driven development).
+                      You can still override this for individual features.
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

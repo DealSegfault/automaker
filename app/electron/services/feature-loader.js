@@ -38,7 +38,51 @@ class FeatureLoader {
    * @param {string} [summary] - Optional summary of what was done
    */
   async updateFeatureStatus(featureId, status, projectPath, summary) {
+    const featuresPath = path.join(
+      projectPath,
+      ".automaker",
+      "feature_list.json"
+    );
+
+    // 🛡️ SAFETY: Create backup before any modification
+    const backupPath = path.join(
+      projectPath,
+      ".automaker",
+      "feature_list.backup.json"
+    );
+
+    try {
+      const originalContent = await fs.readFile(featuresPath, "utf-8");
+      await fs.writeFile(backupPath, originalContent, "utf-8");
+      console.log(`[FeatureLoader] Created backup at ${backupPath}`);
+    } catch (error) {
+      console.warn(`[FeatureLoader] Could not create backup: ${error.message}`);
+    }
+
     const features = await this.loadFeatures(projectPath);
+
+    // 🛡️ VALIDATION: Ensure we loaded features successfully
+    if (!Array.isArray(features)) {
+      throw new Error("CRITICAL: features is not an array - aborting to prevent data loss");
+    }
+
+    if (features.length === 0) {
+      console.warn(`[FeatureLoader] WARNING: Feature list is empty. This may indicate corruption.`);
+      // Try to restore from backup
+      try {
+        const backupContent = await fs.readFile(backupPath, "utf-8");
+        const backupFeatures = JSON.parse(backupContent);
+        if (Array.isArray(backupFeatures) && backupFeatures.length > 0) {
+          console.log(`[FeatureLoader] Restored ${backupFeatures.length} features from backup`);
+          // Use backup features instead
+          features.length = 0;
+          features.push(...backupFeatures);
+        }
+      } catch (backupError) {
+        console.error(`[FeatureLoader] Could not restore from backup: ${backupError.message}`);
+      }
+    }
+
     const feature = features.find((f) => f.id === featureId);
 
     if (!feature) {
@@ -55,11 +99,6 @@ class FeatureLoader {
     }
 
     // Save back to file
-    const featuresPath = path.join(
-      projectPath,
-      ".automaker",
-      "feature_list.json"
-    );
     const toSave = features.map((f) => {
       const featureData = {
         id: f.id,
@@ -87,8 +126,14 @@ class FeatureLoader {
       return featureData;
     });
 
+    // 🛡️ FINAL VALIDATION: Ensure we're not writing an empty array
+    if (!Array.isArray(toSave) || toSave.length === 0) {
+      throw new Error("CRITICAL: Attempted to save empty feature list - aborting to prevent data loss");
+    }
+
     await fs.writeFile(featuresPath, JSON.stringify(toSave, null, 2), "utf-8");
     console.log(`[FeatureLoader] Updated feature ${featureId}: status=${status}${summary ? `, summary="${summary}"` : ""}`);
+    console.log(`[FeatureLoader] Successfully saved ${toSave.length} features to feature_list.json`);
   }
 
   /**
