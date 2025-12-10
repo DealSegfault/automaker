@@ -598,16 +598,27 @@ export function ProfilesView() {
               Pre-configured profiles for common use cases. These cannot be
               edited or deleted.
             </p>
-            <div className="space-y-3">
-              {builtInProfiles.map((profile) => (
-                <SortableProfileCard
-                  key={profile.id}
-                  profile={profile}
-                  onEdit={() => {}}
-                  onDelete={() => {}}
-                />
-              ))}
-            </div>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={builtInProfiles.map((p) => p.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="space-y-3">
+                  {builtInProfiles.map((profile) => (
+                    <SortableProfileCard
+                      key={profile.id}
+                      profile={profile}
+                      onEdit={() => {}}
+                      onDelete={() => {}}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
           </div>
         </div>
       </div>

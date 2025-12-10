@@ -311,5 +311,24 @@
     "skipTests": false,
     "model": "sonnet",
     "thinkingLevel": "none"
+  },
+  {
+    "id": "feature-1765374057950-og96suob2",
+    "category": "Other",
+    "description": "I found an issue u can reorder custom profiles created by our self but the pre build in when u try to drag nothing happend",
+    "steps": [],
+    "status": "verified",
+    "startedAt": "2025-12-10T13:40:58.991Z",
+    "imagePaths": [
+      {
+        "id": "img-1765374055642-rdjksh8g1",
+        "path": "/Users/shirone/Library/Application Support/automaker/images/1765374055641-o7pu97zuz_SCR-20251210-namv.png",
+        "filename": "SCR-20251210-namv.png",
+        "mimeType": "image/png"
+      }
+    ],
+    "skipTests": true,
+    "model": "sonnet",
+    "thinkingLevel": "medium"
   }
 ]
