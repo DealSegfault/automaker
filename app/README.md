@@ -70,7 +70,7 @@ This will start both the Next.js development server and the Electron application
 4. Successful runs show “Token captured automatically.”; otherwise copy/paste the token from the log.
 5. Optional: `node --test tests/claude-cli-detector.test.js` to verify token parsing.
 
-**Step 6:** MOST IMPORANT: Run the Following after all is setup
+**Step 6:** MOST IMPORTANT: Run the Following after all is setup
 
 ```bash
 echo "W"
