@@ -198,7 +198,10 @@ export function NewProjectModal({
     }
   };
 
-  const projectPath = workspaceDir && projectName ? `${workspaceDir}/${projectName}` : "";
+  // Use platform-specific path separator
+  const pathSep = typeof window !== 'undefined' && (window as any).electronAPI ?
+    (navigator.platform.indexOf('Win') !== -1 ? '\\' : '/') : '/';
+  const projectPath = workspaceDir && projectName ? `${workspaceDir}${pathSep}${projectName}` : "";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

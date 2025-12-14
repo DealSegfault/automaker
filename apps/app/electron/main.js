@@ -8,21 +8,114 @@
 const path = require("path");
 const { spawn } = require("child_process");
 const fs = require("fs");
-
-// Load environment variables from .env file
-require("dotenv").config({ path: path.join(__dirname, "../.env") });
-
+const http = require("http");
 const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
+
+// Load environment variables from .env file (development only)
+if (!app.isPackaged) {
+  try {
+    require("dotenv").config({ path: path.join(__dirname, "../.env") });
+  } catch (error) {
+    console.warn("[Electron] dotenv not available:", error.message);
+  }
+}
 
 let mainWindow = null;
 let serverProcess = null;
+let staticServer = null;
 const SERVER_PORT = 3008;
+const STATIC_PORT = 3007;
 
-// Get icon path - works in both dev and production
+// Get icon path - works in both dev and production, cross-platform
 function getIconPath() {
-  return app.isPackaged
-    ? path.join(process.resourcesPath, "app", "public", "logo.png")
-    : path.join(__dirname, "../public/logo.png");
+  // Different icon formats for different platforms
+  let iconFile;
+  if (process.platform === "win32") {
+    iconFile = "icon.ico";
+  } else if (process.platform === "darwin") {
+    iconFile = "logo_larger.png";
+  } else {
+    // Linux
+    iconFile = "logo_larger.png";
+  }
+
+  const iconPath = path.join(__dirname, "../public", iconFile);
+
+  // Verify the icon exists
+  if (!fs.existsSync(iconPath)) {
+    console.warn(`[Electron] Icon not found at: ${iconPath}`);
+    return null;
+  }
+
+  return iconPath;
+}
+
+/**
+ * Start static file server for production builds
+ */
+async function startStaticServer() {
+  const staticPath = path.join(__dirname, "../out");
+
+  staticServer = http.createServer((request, response) => {
+    // Parse the URL and remove query string
+    let filePath = path.join(staticPath, request.url.split("?")[0]);
+
+    // Default to index.html for directory requests
+    if (filePath.endsWith("/")) {
+      filePath = path.join(filePath, "index.html");
+    } else if (!path.extname(filePath)) {
+      filePath += ".html";
+    }
+
+    // Check if file exists
+    fs.stat(filePath, (err, stats) => {
+      if (err || !stats.isFile()) {
+        // Try index.html for SPA fallback
+        filePath = path.join(staticPath, "index.html");
+      }
+
+      // Read and serve the file
+      fs.readFile(filePath, (error, content) => {
+        if (error) {
+          response.writeHead(500);
+          response.end("Server Error");
+          return;
+        }
+
+        // Set content type based on file extension
+        const ext = path.extname(filePath);
+        const contentTypes = {
+          ".html": "text/html",
+          ".js": "application/javascript",
+          ".css": "text/css",
+          ".json": "application/json",
+          ".png": "image/png",
+          ".jpg": "image/jpeg",
+          ".gif": "image/gif",
+          ".svg": "image/svg+xml",
+          ".ico": "image/x-icon",
+          ".woff": "font/woff",
+          ".woff2": "font/woff2",
+          ".ttf": "font/ttf",
+          ".eot": "application/vnd.ms-fontobject",
+        };
+
+        response.writeHead(200, { "Content-Type": contentTypes[ext] || "application/octet-stream" });
+        response.end(content);
+      });
+    });
+  });
+
+  return new Promise((resolve, reject) => {
+    staticServer.listen(STATIC_PORT, (err) => {
+      if (err) {
+        reject(err);
+      } else {
+        console.log(`[Electron] Static server running at http://localhost:${STATIC_PORT}`);
+        resolve();
+      }
+    });
+  });
 }
 
 /**
@@ -71,18 +164,45 @@ async function startServer() {
     command = "node";
     serverPath = path.join(process.resourcesPath, "server", "index.js");
     args = [serverPath];
+
+    // Verify server files exist
+    if (!fs.existsSync(serverPath)) {
+      throw new Error(`Server not found at: ${serverPath}`);
+    }
   }
 
   // Set environment variables for server
+  const serverNodeModules = app.isPackaged
+    ? path.join(process.resourcesPath, "server", "node_modules")
+    : path.join(__dirname, "../../server/node_modules");
+
+  // Set default workspace directory to user's Documents/Automaker
+  const defaultWorkspaceDir = path.join(app.getPath("documents"), "Automaker");
+
+  // Ensure workspace directory exists
+  if (!fs.existsSync(defaultWorkspaceDir)) {
+    try {
+      fs.mkdirSync(defaultWorkspaceDir, { recursive: true });
+      console.log("[Electron] Created workspace directory:", defaultWorkspaceDir);
+    } catch (error) {
+      console.error("[Electron] Failed to create workspace directory:", error);
+    }
+  }
+
   const env = {
     ...process.env,
     PORT: SERVER_PORT.toString(),
     DATA_DIR: app.getPath("userData"),
+    NODE_PATH: serverNodeModules,
+    WORKSPACE_DIR: process.env.WORKSPACE_DIR || defaultWorkspaceDir,
   };
 
   console.log("[Electron] Starting backend server...");
+  console.log("[Electron] Server path:", serverPath);
+  console.log("[Electron] NODE_PATH:", serverNodeModules);
 
   serverProcess = spawn(command, args, {
+    cwd: path.dirname(serverPath),
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -97,6 +217,11 @@ async function startServer() {
 
   serverProcess.on("close", (code) => {
     console.log(`[Server] Process exited with code ${code}`);
+    serverProcess = null;
+  });
+
+  serverProcess.on("error", (err) => {
+    console.error(`[Server] Failed to start server process:`, err);
     serverProcess = null;
   });
 
@@ -143,12 +268,12 @@ async function waitForServer(maxAttempts = 30) {
  * Create the main window
  */
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  const iconPath = getIconPath();
+  const windowOptions = {
     width: 1400,
     height: 900,
     minWidth: 1024,
     minHeight: 700,
-    icon: getIconPath(),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -156,17 +281,20 @@ function createWindow() {
     },
     titleBarStyle: "hiddenInset",
     backgroundColor: "#0a0a0a",
-  });
+  };
 
-  // Load Next.js dev server in development or production build
+  // Only set icon if it exists
+  if (iconPath) {
+    windowOptions.icon = iconPath;
+  }
+
+  mainWindow = new BrowserWindow(windowOptions);
+
+  // Load Next.js dev server in development or static server in production
   const isDev = !app.isPackaged;
-  if (isDev) {
-    mainWindow.loadURL("http://localhost:3007");
-    if (process.env.OPEN_DEVTOOLS === "true") {
-      mainWindow.webContents.openDevTools();
-    }
-  } else {
-    mainWindow.loadFile(path.join(__dirname, "../.next/server/app/index.html"));
+  mainWindow.loadURL(`http://localhost:${STATIC_PORT}`);
+  if (isDev && process.env.OPEN_DEVTOOLS === "true") {
+    mainWindow.webContents.openDevTools();
   }
 
   mainWindow.on("closed", () => {
@@ -184,10 +312,22 @@ function createWindow() {
 app.whenReady().then(async () => {
   // Set app icon (dock icon on macOS)
   if (process.platform === "darwin" && app.dock) {
-    app.dock.setIcon(getIconPath());
+    const iconPath = getIconPath();
+    if (iconPath) {
+      try {
+        app.dock.setIcon(iconPath);
+      } catch (error) {
+        console.warn("[Electron] Failed to set dock icon:", error.message);
+      }
+    }
   }
 
   try {
+    // Start static file server in production
+    if (app.isPackaged) {
+      await startStaticServer();
+    }
+
     // Start backend server
     await startServer();
 
@@ -217,6 +357,13 @@ app.on("before-quit", () => {
     console.log("[Electron] Stopping server...");
     serverProcess.kill();
     serverProcess = null;
+  }
+
+  // Close static server
+  if (staticServer) {
+    console.log("[Electron] Stopping static server...");
+    staticServer.close();
+    staticServer = null;
   }
 });
 

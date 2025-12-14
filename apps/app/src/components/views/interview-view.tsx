@@ -305,7 +305,10 @@ export function InterviewView() {
 
     try {
       const api = getElectronAPI();
-      const fullProjectPath = `${projectPath}/${projectName}`;
+      // Use platform-specific path separator
+      const pathSep = typeof window !== 'undefined' && (window as any).electronAPI ?
+        (navigator.platform.indexOf('Win') !== -1 ? '\\' : '/') : '/';
+      const fullProjectPath = `${projectPath}${pathSep}${projectName}`;
 
       // Create project directory
       await api.mkdir(fullProjectPath);

@@ -19,9 +19,11 @@ While we have made efforts to review this codebase for security vulnerabilities 
 ## Recommendations
 
 ### 1. Review the Code First
+
 Before running Automaker, we strongly recommend reviewing the source code yourself to understand what operations it performs and ensure you are comfortable with its behavior.
 
 ### 2. Use Sandboxing (Highly Recommended)
+
 **We do not recommend running Automaker directly on your local computer** due to the risk of AI agents having access to your entire file system. Instead, consider:
 
 - **Docker**: Run Automaker in a Docker container to isolate it from your host system
@@ -29,20 +31,25 @@ Before running Automaker, we strongly recommend reviewing the source code yourse
 - **Cloud Development Environment**: Use a cloud-based development environment that provides isolation
 
 ### 3. Limit Access
+
 If you must run locally:
+
 - Create a dedicated user account with limited permissions
 - Only grant access to specific project directories
 - Avoid running with administrator/root privileges
 - Keep sensitive files and credentials outside of project directories
 
 ### 4. Monitor Activity
+
 - Review the agent's actions in the output logs
 - Pay attention to file modifications and command executions
 - Stop the agent immediately if you notice unexpected behavior
 
-## No Warranty
+## No Warranty & Limitation of Liability
 
-This software is provided "as is", without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and noninfringement. In no event shall the authors or copyright holders be liable for any claim, damages, or other liability, whether in an action of contract, tort, or otherwise, arising from, out of, or in connection with the software or the use or other dealings in the software.
+THE SOFTWARE UTILIZES ARTIFICIAL INTELLIGENCE TO GENERATE CODE, EXECUTE COMMANDS, AND INTERACT WITH YOUR FILE SYSTEM. YOU ACKNOWLEDGE THAT AI SYSTEMS CAN BE UNPREDICTABLE, MAY GENERATE INCORRECT, INSECURE, OR DESTRUCTIVE CODE, AND MAY TAKE ACTIONS THAT COULD DAMAGE YOUR SYSTEM, FILES, OR HARDWARE.
+
+This software is provided "as is", without warranty of any kind, express or implied. In no event shall the authors or copyright holders be liable for any claim, damages, or other liability, including but not limited to hardware damage, data loss, financial loss, or business interruption, whether in an action of contract, tort, or otherwise, arising from, out of, or in connection with the software or the use or other dealings in the software.
 
 ## Acknowledgment
 

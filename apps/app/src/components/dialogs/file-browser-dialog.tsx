@@ -113,8 +113,8 @@ export function FileBrowserDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-popover border-border max-w-2xl max-h-[80vh]">
-        <DialogHeader>
+      <DialogContent className="bg-popover border-border max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+        <DialogHeader className="pb-2">
           <DialogTitle className="flex items-center gap-2">
             <FolderOpen className="w-5 h-5 text-brand-500" />
             {title}
@@ -124,7 +124,7 @@ export function FileBrowserDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-3 min-h-[400px]">
+        <div className="flex flex-col gap-3 min-h-[400px] flex-1 overflow-hidden py-2">
           {/* Drives selector (Windows only) */}
           {drives.length > 0 && (
             <div className="flex flex-wrap gap-2 p-3 rounded-lg bg-sidebar-accent/10 border border-sidebar-border">
@@ -216,7 +216,7 @@ export function FileBrowserDialog({
           </div>
         </div>
 
-        <DialogFooter className="gap-2 sm:gap-0">
+        <DialogFooter className="border-t border-border pt-4 gap-2">
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>

@@ -34,6 +34,8 @@ export function createTemplatesRoutes(): Router {
         return;
       }
 
+      console.log(`[Templates] Clone request - Repo: ${repoUrl}, Project: ${projectName}, Parent: ${parentDir}`);
+
       // Validate repo URL is a valid GitHub URL
       const githubUrlPattern = /^https:\/\/github\.com\/[\w-]+\/[\w.-]+$/;
       if (!githubUrlPattern.test(repoUrl)) {
@@ -79,12 +81,32 @@ export function createTemplatesRoutes(): Router {
 
       // Ensure parent directory exists
       try {
-        await fs.mkdir(parentDir, { recursive: true });
+        // Check if parentDir is a root path (Windows: C:\, D:\, etc. or Unix: /)
+        const isWindowsRoot = /^[A-Za-z]:\\?$/.test(parentDir);
+        const isUnixRoot = parentDir === '/' || parentDir === '';
+        const isRoot = isWindowsRoot || isUnixRoot;
+
+        if (isRoot) {
+          // Root paths always exist, just verify access
+          console.log(`[Templates] Using root path: ${parentDir}`);
+          await fs.access(parentDir);
+        } else {
+          // Check if parent directory exists
+          const parentExists = await fs.access(parentDir).then(() => true).catch(() => false);
+
+          if (!parentExists) {
+            console.log(`[Templates] Creating parent directory: ${parentDir}`);
+            await fs.mkdir(parentDir, { recursive: true });
+          } else {
+            console.log(`[Templates] Parent directory exists: ${parentDir}`);
+          }
+        }
       } catch (error) {
-        console.error("[Templates] Failed to create parent directory:", error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error("[Templates] Failed to access parent directory:", parentDir, error);
         res.status(500).json({
           success: false,
-          error: "Failed to create parent directory",
+          error: `Failed to access parent directory: ${errorMessage}`,
         });
         return;
       }
