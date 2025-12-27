@@ -17,6 +17,8 @@ import { PathNotAllowedError } from '@automaker/platform';
 import { createCustomOptions } from '../../../lib/sdk-options.js';
 import * as secureFs from '../../../lib/secure-fs.js';
 import * as path from 'path';
+import type { SettingsService } from '../../../services/settings-service.js';
+import { getAutoLoadClaudeMdSetting } from '../../../lib/settings-helpers.js';
 
 const logger = createLogger('DescribeFile');
 
@@ -74,7 +76,9 @@ async function extractTextFromStream(
  *
  * @returns Express request handler for file description
  */
-export function createDescribeFileHandler(): (req: Request, res: Response) => Promise<void> {
+export function createDescribeFileHandler(
+  settingsService?: SettingsService
+): (req: Request, res: Response) => Promise<void> {
   return async (req: Request, res: Response): Promise<void> => {
     try {
       const { filePath } = req.body as DescribeFileRequestBody;
@@ -165,6 +169,13 @@ File: ${fileName}${truncated ? ' (truncated)' : ''}`;
       // Use the file's directory as the working directory
       const cwd = path.dirname(resolvedPath);
 
+      // Load autoLoadClaudeMd setting
+      const autoLoadClaudeMd = await getAutoLoadClaudeMdSetting(
+        cwd,
+        settingsService,
+        '[DescribeFile]'
+      );
+
       // Use centralized SDK options with proper cwd validation
       // No tools needed since we're passing file content directly
       const sdkOptions = createCustomOptions({
@@ -172,6 +183,7 @@ File: ${fileName}${truncated ? ' (truncated)' : ''}`;
         model: CLAUDE_MODEL_MAP.haiku,
         maxTurns: 1,
         allowedTools: [],
+        autoLoadClaudeMd,
         sandbox: { enabled: true, autoAllowBashIfSandboxed: true },
       });
 

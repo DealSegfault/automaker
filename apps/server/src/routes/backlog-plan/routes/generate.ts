@@ -1,22 +1,20 @@
 /**
- * POST /generate endpoint - Generate suggestions
+ * POST /generate endpoint - Generate a backlog plan
  */
 
 import type { Request, Response } from 'express';
 import type { EventEmitter } from '../../../lib/events.js';
-import { createLogger } from '@automaker/utils';
-import { getSuggestionsStatus, setRunningState, getErrorMessage, logError } from '../common.js';
-import { generateSuggestions } from '../generate-suggestions.js';
+import { getBacklogPlanStatus, setRunningState, getErrorMessage, logError } from '../common.js';
+import { generateBacklogPlan } from '../generate-plan.js';
 import type { SettingsService } from '../../../services/settings-service.js';
-
-const logger = createLogger('Suggestions');
 
 export function createGenerateHandler(events: EventEmitter, settingsService?: SettingsService) {
   return async (req: Request, res: Response): Promise<void> => {
     try {
-      const { projectPath, suggestionType = 'features' } = req.body as {
+      const { projectPath, prompt, model } = req.body as {
         projectPath: string;
-        suggestionType?: string;
+        prompt: string;
+        model?: string;
       };
 
       if (!projectPath) {
@@ -24,11 +22,16 @@ export function createGenerateHandler(events: EventEmitter, settingsService?: Se
         return;
       }
 
-      const { isRunning } = getSuggestionsStatus();
+      if (!prompt) {
+        res.status(400).json({ success: false, error: 'prompt required' });
+        return;
+      }
+
+      const { isRunning } = getBacklogPlanStatus();
       if (isRunning) {
         res.json({
           success: false,
-          error: 'Suggestions generation is already running',
+          error: 'Backlog plan generation is already running',
         });
         return;
       }
@@ -38,11 +41,11 @@ export function createGenerateHandler(events: EventEmitter, settingsService?: Se
       setRunningState(true, abortController);
 
       // Start generation in background
-      generateSuggestions(projectPath, suggestionType, events, abortController, settingsService)
+      generateBacklogPlan(projectPath, prompt, events, abortController, settingsService, model)
         .catch((error) => {
-          logError(error, 'Generate suggestions failed (background)');
-          events.emit('suggestions:event', {
-            type: 'suggestions_error',
+          logError(error, 'Generate backlog plan failed (background)');
+          events.emit('backlog-plan:event', {
+            type: 'backlog_plan_error',
             error: getErrorMessage(error),
           });
         })
@@ -52,7 +55,7 @@ export function createGenerateHandler(events: EventEmitter, settingsService?: Se
 
       res.json({ success: true });
     } catch (error) {
-      logError(error, 'Generate suggestions failed');
+      logError(error, 'Generate backlog plan failed');
       res.status(500).json({ success: false, error: getErrorMessage(error) });
     }
   };

@@ -33,6 +33,7 @@ export class ClaudeProvider extends BaseProvider {
       abortController,
       conversationHistory,
       sdkSessionId,
+      settingSources,
     } = options;
 
     // Build Claude SDK options
@@ -55,6 +56,8 @@ export class ClaudeProvider extends BaseProvider {
       ...(sdkSessionId && conversationHistory && conversationHistory.length > 0
         ? { resume: sdkSessionId }
         : {}),
+      // Forward settingSources for CLAUDE.md file loading
+      ...(settingSources && { settingSources }),
     };
 
     // Build prompt payload

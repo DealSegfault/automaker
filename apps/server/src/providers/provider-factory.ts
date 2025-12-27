@@ -15,7 +15,7 @@ import type { InstallationStatus } from './types.js';
 import { CURSOR_MODEL_MAP, OPENCODE_MODEL_MAP, CODEX_MODEL_MAP } from '@automaker/types';
 
 // Default provider setting - can be 'claude', 'cursor', 'opencode', or 'codex'
-let defaultProvider: 'claude' | 'cursor' | 'opencode' | 'codex' = 'cursor';
+let defaultProvider: 'claude' | 'cursor' | 'opencode' | 'codex' = 'claude';
 
 const CURSOR_MODEL_IDS = new Set(
   Object.values(CURSOR_MODEL_MAP).map((model) => model.toLowerCase())

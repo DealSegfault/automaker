@@ -31,6 +31,7 @@ import { createModelsRoutes } from './routes/models/index.js';
 import { createRunningAgentsRoutes } from './routes/running-agents/index.js';
 import { createWorkspaceRoutes } from './routes/workspace/index.js';
 import { createTemplatesRoutes } from './routes/templates/index.js';
+import { createBacklogPlanRoutes } from './routes/backlog-plan/index.js';
 import {
   createTerminalRoutes,
   validateTerminalToken,
@@ -112,16 +113,21 @@ app.use(express.json({ limit: '50mb' }));
 const events: EventEmitter = createEventEmitter();
 
 // Create services
-const agentService = new AgentService(DATA_DIR, events);
-const featureLoader = new FeatureLoader();
-const autoModeService = new AutoModeService(events);
 const settingsService = new SettingsService(DATA_DIR);
+const agentService = new AgentService(DATA_DIR, events, settingsService);
+const featureLoader = new FeatureLoader();
+const autoModeService = new AutoModeService(events, settingsService);
 const claudeUsageService = new ClaudeUsageService();
 
 // Initialize services
 (async () => {
-  await agentService.initialize();
-  console.log('[Server] Agent service initialized');
+  try {
+    await agentService.initialize();
+    console.log('[Server] Agent service initialized');
+  } catch (error) {
+    console.error('[Server] Agent service initialization failed:', error);
+    process.exit(1);
+  }
 })();
 
 // Run stale validation cleanup every hour to prevent memory leaks from crashed validations
@@ -143,22 +149,23 @@ app.use('/api/fs', createFsRoutes(events));
 app.use('/api/agent', createAgentRoutes(agentService, events));
 app.use('/api/sessions', createSessionsRoutes(agentService));
 app.use('/api/features', createFeaturesRoutes(featureLoader));
+app.use('/api/backlog-plan', createBacklogPlanRoutes(events, settingsService));
 app.use('/api/auto-mode', createAutoModeRoutes(autoModeService));
 app.use('/api/enhance-prompt', createEnhancePromptRoutes());
 app.use('/api/worktree', createWorktreeRoutes());
 app.use('/api/git', createGitRoutes());
 app.use('/api/setup', createSetupRoutes());
-app.use('/api/suggestions', createSuggestionsRoutes(events));
+app.use('/api/suggestions', createSuggestionsRoutes(events, settingsService));
 app.use('/api/models', createModelsRoutes());
-app.use('/api/spec-regeneration', createSpecRegenerationRoutes(events));
+app.use('/api/spec-regeneration', createSpecRegenerationRoutes(events, settingsService));
 app.use('/api/running-agents', createRunningAgentsRoutes(autoModeService));
 app.use('/api/workspace', createWorkspaceRoutes());
 app.use('/api/templates', createTemplatesRoutes());
 app.use('/api/terminal', createTerminalRoutes());
 app.use('/api/settings', createSettingsRoutes(settingsService));
 app.use('/api/claude', createClaudeRoutes(claudeUsageService));
-app.use('/api/github', createGitHubRoutes(events));
-app.use('/api/context', createContextRoutes());
+app.use('/api/github', createGitHubRoutes(events, settingsService));
+app.use('/api/context', createContextRoutes(settingsService));
 
 // Create HTTP server
 const server = createServer(app);

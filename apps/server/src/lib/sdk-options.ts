@@ -20,6 +20,7 @@ import path from 'path';
 import { resolveModelString } from '@automaker/model-resolver';
 import { DEFAULT_MODELS, CLAUDE_MODEL_MAP } from '@automaker/types';
 import { isPathAllowed, PathNotAllowedError, getAllowedRootDirectory } from '@automaker/platform';
+import type { SystemPromptConfig } from '../providers/types.js';
 
 /**
  * Validate that a working directory is allowed by ALLOWED_ROOT_DIRECTORY.
@@ -136,6 +137,52 @@ function getBaseOptions(): Partial<Options> {
   };
 }
 
+function isClaudeModelKey(model?: string): boolean {
+  if (!model) {
+    return true;
+  }
+  return model.includes('claude-') || Object.prototype.hasOwnProperty.call(CLAUDE_MODEL_MAP, model);
+}
+
+/**
+ * Build system prompt configuration based on autoLoadClaudeMd setting.
+ * When autoLoadClaudeMd is true and the model is Claude:
+ * - Uses preset mode with 'claude_code' to enable CLAUDE.md auto-loading
+ * - If there's a custom systemPrompt, appends it to the preset
+ * - Sets settingSources to ['user', 'project'] for SDK to load CLAUDE.md files
+ */
+function buildClaudeMdOptions(config: CreateSdkOptionsConfig): {
+  systemPrompt?: string | SystemPromptConfig;
+  settingSources?: Array<'user' | 'project' | 'local'>;
+} {
+  const candidateModel = config.model || config.sessionModel;
+  const shouldAutoLoad =
+    config.autoLoadClaudeMd && (candidateModel ? isClaudeModelKey(candidateModel) : true);
+
+  if (!shouldAutoLoad) {
+    return config.systemPrompt ? { systemPrompt: config.systemPrompt } : {};
+  }
+
+  const result: {
+    systemPrompt: SystemPromptConfig;
+    settingSources: Array<'user' | 'project' | 'local'>;
+  } = {
+    systemPrompt: {
+      type: 'preset',
+      preset: 'claude_code',
+    },
+    settingSources: ['user', 'project'],
+  };
+
+  if (config.systemPrompt) {
+    if (typeof config.systemPrompt === 'string') {
+      result.systemPrompt.append = config.systemPrompt;
+    }
+  }
+
+  return result;
+}
+
 /**
  * Options configuration for creating SDK options
  */
@@ -150,7 +197,7 @@ export interface CreateSdkOptionsConfig {
   sessionModel?: string;
 
   /** Optional system prompt */
-  systemPrompt?: string;
+  systemPrompt?: string | SystemPromptConfig;
 
   /** Optional abort controller for cancellation */
   abortController?: AbortController;
@@ -160,6 +207,9 @@ export interface CreateSdkOptionsConfig {
     type: 'json_schema';
     schema: Record<string, unknown>;
   };
+
+  /** Enable auto-loading of CLAUDE.md files via SDK's settingSources option */
+  autoLoadClaudeMd?: boolean;
 }
 
 /**
@@ -174,6 +224,8 @@ export function createSpecGenerationOptions(config: CreateSdkOptionsConfig): Opt
   // Validate working directory before creating options
   validateWorkingDirectory(config.cwd);
 
+  const claudeMdOptions = buildClaudeMdOptions(config);
+
   return {
     ...getBaseOptions(),
     // Override permissionMode - spec generation only needs read-only tools
@@ -184,7 +236,7 @@ export function createSpecGenerationOptions(config: CreateSdkOptionsConfig): Opt
     maxTurns: MAX_TURNS.maximum,
     cwd: config.cwd,
     allowedTools: [...TOOL_PRESETS.specGeneration],
-    ...(config.systemPrompt && { systemPrompt: config.systemPrompt }),
+    ...claudeMdOptions,
     ...(config.abortController && { abortController: config.abortController }),
     ...(config.outputFormat && { outputFormat: config.outputFormat }),
   };
@@ -202,6 +254,8 @@ export function createFeatureGenerationOptions(config: CreateSdkOptionsConfig): 
   // Validate working directory before creating options
   validateWorkingDirectory(config.cwd);
 
+  const claudeMdOptions = buildClaudeMdOptions(config);
+
   return {
     ...getBaseOptions(),
     // Override permissionMode - feature generation only needs read-only tools
@@ -210,7 +264,7 @@ export function createFeatureGenerationOptions(config: CreateSdkOptionsConfig): 
     maxTurns: MAX_TURNS.quick,
     cwd: config.cwd,
     allowedTools: [...TOOL_PRESETS.readOnly],
-    ...(config.systemPrompt && { systemPrompt: config.systemPrompt }),
+    ...claudeMdOptions,
     ...(config.abortController && { abortController: config.abortController }),
   };
 }
@@ -227,13 +281,15 @@ export function createSuggestionsOptions(config: CreateSdkOptionsConfig): Option
   // Validate working directory before creating options
   validateWorkingDirectory(config.cwd);
 
+  const claudeMdOptions = buildClaudeMdOptions(config);
+
   return {
     ...getBaseOptions(),
     model: getModelForUseCase('suggestions', config.model),
     maxTurns: MAX_TURNS.extended,
     cwd: config.cwd,
     allowedTools: [...TOOL_PRESETS.readOnly],
-    ...(config.systemPrompt && { systemPrompt: config.systemPrompt }),
+    ...claudeMdOptions,
     ...(config.abortController && { abortController: config.abortController }),
     ...(config.outputFormat && { outputFormat: config.outputFormat }),
   };
@@ -254,6 +310,7 @@ export function createChatOptions(config: CreateSdkOptionsConfig): Options {
 
   // Model priority: explicit model > session model > chat default
   const effectiveModel = config.model || config.sessionModel;
+  const claudeMdOptions = buildClaudeMdOptions(config);
 
   return {
     ...getBaseOptions(),
@@ -265,7 +322,7 @@ export function createChatOptions(config: CreateSdkOptionsConfig): Options {
       enabled: true,
       autoAllowBashIfSandboxed: true,
     },
-    ...(config.systemPrompt && { systemPrompt: config.systemPrompt }),
+    ...claudeMdOptions,
     ...(config.abortController && { abortController: config.abortController }),
   };
 }
@@ -283,6 +340,8 @@ export function createAutoModeOptions(config: CreateSdkOptionsConfig): Options {
   // Validate working directory before creating options
   validateWorkingDirectory(config.cwd);
 
+  const claudeMdOptions = buildClaudeMdOptions(config);
+
   return {
     ...getBaseOptions(),
     model: getModelForUseCase('auto', config.model),
@@ -293,7 +352,7 @@ export function createAutoModeOptions(config: CreateSdkOptionsConfig): Options {
       enabled: true,
       autoAllowBashIfSandboxed: true,
     },
-    ...(config.systemPrompt && { systemPrompt: config.systemPrompt }),
+    ...claudeMdOptions,
     ...(config.abortController && { abortController: config.abortController }),
   };
 }
@@ -313,6 +372,8 @@ export function createCustomOptions(
   // Validate working directory before creating options
   validateWorkingDirectory(config.cwd);
 
+  const claudeMdOptions = buildClaudeMdOptions(config);
+
   return {
     ...getBaseOptions(),
     model: getModelForUseCase('default', config.model),
@@ -320,7 +381,7 @@ export function createCustomOptions(
     cwd: config.cwd,
     allowedTools: config.allowedTools ? [...config.allowedTools] : [...TOOL_PRESETS.readOnly],
     ...(config.sandbox && { sandbox: config.sandbox }),
-    ...(config.systemPrompt && { systemPrompt: config.systemPrompt }),
+    ...claudeMdOptions,
     ...(config.abortController && { abortController: config.abortController }),
   };
 }

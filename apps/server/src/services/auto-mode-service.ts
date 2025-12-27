@@ -52,7 +52,9 @@ import path from 'path';
 import * as secureFs from '../lib/secure-fs.js';
 import type { EventEmitter } from '../lib/events.js';
 import { createAutoModeOptions, validateWorkingDirectory } from '../lib/sdk-options.js';
+import { filterClaudeMdFromContext, getAutoLoadClaudeMdSetting } from '../lib/settings-helpers.js';
 import { FeatureLoader } from './feature-loader.js';
+import type { SettingsService } from './settings-service.js';
 
 const execAsync = promisify(exec);
 
@@ -397,9 +399,11 @@ export class AutoModeService {
   private config: AutoModeConfig | null = null;
   private pendingApprovals = new Map<string, PendingApproval>();
   private summaryRubric: GenerateRubricOutput | null = null;
+  private settingsService: SettingsService | null = null;
 
-  constructor(events: EventEmitter) {
+  constructor(events: EventEmitter, settingsService?: SettingsService) {
     this.events = events;
+    this.settingsService = settingsService ?? null;
   }
 
   /**
@@ -611,10 +615,16 @@ export class AutoModeService {
       // Build the prompt - use continuation prompt if provided (for recovery after plan approval)
       let prompt: string;
       // Load project context files (CLAUDE.md, CODE_QUALITY.md, etc.) - passed as system prompt
-      const { formattedPrompt: contextFilesPrompt } = await loadContextFiles({
+      const autoLoadClaudeMd = await getAutoLoadClaudeMdSetting(
+        projectPath,
+        this.settingsService,
+        '[AutoMode]'
+      );
+      const contextFilesResult = await loadContextFiles({
         projectPath,
         fsModule: secureFs as Parameters<typeof loadContextFiles>[0]['fsModule'],
       });
+      const contextFilesPrompt = filterClaudeMdFromContext(contextFilesResult, autoLoadClaudeMd);
 
       if (options?.continuationPrompt) {
         // Continuation prompt is used when recovering from a plan approval
@@ -667,6 +677,7 @@ export class AutoModeService {
           previousContent: options?.previousContent,
           featureDescription: feature.description,
           systemPrompt: contextFilesPrompt || undefined,
+          autoLoadClaudeMd,
         }
       );
 
@@ -820,10 +831,16 @@ export class AutoModeService {
     const contextForPrompt = summaryContext || previousContext;
 
     // Load project context files (CLAUDE.md, CODE_QUALITY.md, etc.) - passed as system prompt
-    const { formattedPrompt: contextFilesPrompt } = await loadContextFiles({
+    const autoLoadClaudeMd = await getAutoLoadClaudeMdSetting(
+      projectPath,
+      this.settingsService,
+      '[AutoMode]'
+    );
+    const contextFilesResult = await loadContextFiles({
       projectPath,
       fsModule: secureFs as Parameters<typeof loadContextFiles>[0]['fsModule'],
     });
+    const contextFilesPrompt = filterClaudeMdFromContext(contextFilesResult, autoLoadClaudeMd);
 
     // Build complete prompt with feature info, previous context, and follow-up instructions
     let fullPrompt = `## Follow-up on Feature Implementation
@@ -957,6 +974,7 @@ Address the follow-up instructions above. Review the previous work and make the 
           previousContent: previousContext || undefined,
           featureDescription: feature?.description,
           systemPrompt: contextFilesPrompt || undefined,
+          autoLoadClaudeMd,
         }
       );
 
@@ -1840,6 +1858,7 @@ This helps parse your summary correctly in the output logs.`;
       previousContent?: string;
       systemPrompt?: string;
       featureDescription?: string;
+      autoLoadClaudeMd?: boolean;
     }
   ): Promise<void> {
     const finalProjectPath = options?.projectPath || projectPath;
@@ -1917,6 +1936,8 @@ This mock response was generated because AUTOMAKER_MOCK_AGENT=true was set.
       cwd: workDir,
       model: model,
       abortController,
+      systemPrompt: options?.systemPrompt,
+      autoLoadClaudeMd: options?.autoLoadClaudeMd,
     });
 
     // Extract model, maxTurns, and allowedTools from SDK options
@@ -1942,10 +1963,17 @@ This mock response was generated because AUTOMAKER_MOCK_AGENT=true was set.
     );
 
     // Debug: Log if system prompt is provided
-    if (options?.systemPrompt) {
-      console.log(
-        `[AutoMode] System prompt provided (${options.systemPrompt.length} chars), first 200 chars:\n${options.systemPrompt.substring(0, 200)}...`
-      );
+    if (sdkOptions.systemPrompt) {
+      if (typeof sdkOptions.systemPrompt === 'string') {
+        console.log(
+          `[AutoMode] System prompt provided (${sdkOptions.systemPrompt.length} chars), first 200 chars:\n${sdkOptions.systemPrompt.substring(0, 200)}...`
+        );
+      } else {
+        const appended = sdkOptions.systemPrompt.append || '';
+        console.log(
+          `[AutoMode] System prompt preset enabled (${sdkOptions.systemPrompt.preset}), appendLen=${appended.length}`
+        );
+      }
     }
 
     const executeOptions: ExecuteOptions = {
@@ -1955,7 +1983,8 @@ This mock response was generated because AUTOMAKER_MOCK_AGENT=true was set.
       cwd: workDir,
       allowedTools: allowedTools,
       abortController,
-      systemPrompt: options?.systemPrompt,
+      systemPrompt: sdkOptions.systemPrompt,
+      settingSources: sdkOptions.settingSources,
     };
 
     // Execute via provider
@@ -2465,14 +2494,6 @@ Implement all the changes described in the plan above.`;
               console.log(`[AutoMode] Implementation completed for feature ${featureId}`);
               // Exit the original stream loop since continuation is done
               break streamLoop;
-            }
-
-            // Only emit progress for non-marker text (marker was already handled above)
-            if (!specDetected) {
-              this.emitAutoModeEvent('auto_mode_progress', {
-                featureId,
-                content: block.text,
-              });
             }
           } else if (block.type === 'tool_use') {
             // Emit event for real-time UI

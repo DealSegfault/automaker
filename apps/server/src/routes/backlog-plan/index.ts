@@ -1,5 +1,5 @@
 /**
- * Suggestions routes - HTTP API for AI-powered feature suggestions
+ * Backlog Plan routes - HTTP API for AI-assisted backlog modification
  */
 
 import { Router } from 'express';
@@ -8,9 +8,10 @@ import { validatePathParams } from '../../middleware/validate-paths.js';
 import { createGenerateHandler } from './routes/generate.js';
 import { createStopHandler } from './routes/stop.js';
 import { createStatusHandler } from './routes/status.js';
+import { createApplyHandler } from './routes/apply.js';
 import type { SettingsService } from '../../services/settings-service.js';
 
-export function createSuggestionsRoutes(
+export function createBacklogPlanRoutes(
   events: EventEmitter,
   settingsService?: SettingsService
 ): Router {
@@ -23,6 +24,7 @@ export function createSuggestionsRoutes(
   );
   router.post('/stop', createStopHandler());
   router.get('/status', createStatusHandler());
+  router.post('/apply', validatePathParams('projectPath'), createApplyHandler());
 
   return router;
 }

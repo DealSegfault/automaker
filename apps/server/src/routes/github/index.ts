@@ -9,6 +9,7 @@ import { createCheckGitHubRemoteHandler } from './routes/check-github-remote.js'
 import { createListIssuesHandler } from './routes/list-issues.js';
 import { createListPRsHandler } from './routes/list-prs.js';
 import { createValidateIssueHandler } from './routes/validate-issue.js';
+import type { SettingsService } from '../../services/settings-service.js';
 import {
   createValidationStatusHandler,
   createValidationStopHandler,
@@ -17,7 +18,10 @@ import {
   createMarkViewedHandler,
 } from './routes/validation-endpoints.js';
 
-export function createGitHubRoutes(events: EventEmitter): Router {
+export function createGitHubRoutes(
+  events: EventEmitter,
+  settingsService?: SettingsService
+): Router {
   const router = Router();
 
   router.post('/check-remote', validatePathParams('projectPath'), createCheckGitHubRemoteHandler());
@@ -26,7 +30,7 @@ export function createGitHubRoutes(events: EventEmitter): Router {
   router.post(
     '/validate-issue',
     validatePathParams('projectPath'),
-    createValidateIssueHandler(events)
+    createValidateIssueHandler(events, settingsService)
   );
 
   // Validation management endpoints

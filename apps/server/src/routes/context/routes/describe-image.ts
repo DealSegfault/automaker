@@ -17,6 +17,8 @@ import { CLAUDE_MODEL_MAP } from '@automaker/types';
 import { createCustomOptions } from '../../../lib/sdk-options.js';
 import * as fs from 'fs';
 import * as path from 'path';
+import type { SettingsService } from '../../../services/settings-service.js';
+import { getAutoLoadClaudeMdSetting } from '../../../lib/settings-helpers.js';
 
 const logger = createLogger('DescribeImage');
 
@@ -228,7 +230,9 @@ async function extractTextFromStream(
  *
  * @returns Express request handler for image description
  */
-export function createDescribeImageHandler(): (req: Request, res: Response) => Promise<void> {
+export function createDescribeImageHandler(
+  settingsService?: SettingsService
+): (req: Request, res: Response) => Promise<void> {
   return async (req: Request, res: Response): Promise<void> => {
     const requestId = `describe-image-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const startedAt = Date.now();
@@ -325,12 +329,20 @@ export function createDescribeImageHandler(): (req: Request, res: Response) => P
       const cwd = path.dirname(actualPath);
       logger.info(`[${requestId}] Using cwd=${cwd}`);
 
+      // Load autoLoadClaudeMd setting
+      const autoLoadClaudeMd = await getAutoLoadClaudeMdSetting(
+        cwd,
+        settingsService,
+        '[DescribeImage]'
+      );
+
       // Use the same centralized option builder used across the server (validates cwd)
       const sdkOptions = createCustomOptions({
         cwd,
         model: CLAUDE_MODEL_MAP.haiku,
         maxTurns: 1,
         allowedTools: [],
+        autoLoadClaudeMd,
         sandbox: { enabled: true, autoAllowBashIfSandboxed: true },
       });
 
