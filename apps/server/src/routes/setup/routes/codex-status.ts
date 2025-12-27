@@ -23,7 +23,7 @@ export function createCodexStatusHandler() {
           authenticated: status.authenticated ?? false,
           method: status.hasApiKey ? 'api_key' : status.authenticated ? 'cli' : 'none',
           hasApiKey: status.hasApiKey ?? false,
-          apiKeyValid: status.hasApiKey ?? false,
+          apiKeyValid: false, // TODO: Implement actual key validation
           hasEnvApiKey: !!process.env.OPENAI_API_KEY,
         },
       });

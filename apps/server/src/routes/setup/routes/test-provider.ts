@@ -2,10 +2,12 @@
  * POST /test-provider endpoint - Test AI provider by writing a simple file
  *
  * This endpoint tests the configured provider by asking it to write
- * a "Hello World" file to /tmp/hello.md
+ * a "Hello World" file in the system temp directory
  */
 
 import type { Request, Response } from 'express';
+import os from 'os';
+import path from 'path';
 import { ProviderFactory } from '../../../providers/provider-factory.js';
 import { getErrorMessage, logError } from '../common.js';
 
@@ -50,7 +52,11 @@ export function createTestProviderHandler() {
               ? 'Codex CLI'
               : 'Claude SDK';
 
-      const testPrompt = `Create a file at /tmp/hello.md with the following content:
+      const tmpDir = os.tmpdir();
+      const testFilePath = path.join(tmpDir, 'hello.md');
+      const maxOutputChars = 1024 * 1024;
+
+      const testPrompt = `Create a file at ${testFilePath} with the following content:
 
 # Hello World
 
@@ -75,17 +81,25 @@ The AI provider integration is working correctly.
               ? 'gpt-5.2-codex'
               : 'claude-sonnet-4-20250514';
 
+      const appendOutput = (text: string) => {
+        if (!text || output.length >= maxOutputChars) {
+          return;
+        }
+        const next = output + text;
+        output = next.length > maxOutputChars ? next.slice(0, maxOutputChars) : next;
+      };
+
       try {
         for await (const message of provider.executeQuery({
           prompt: testPrompt,
           model,
-          cwd: '/tmp',
+          cwd: tmpDir,
           maxTurns: 5,
         })) {
           if (message.type === 'assistant' && message.message?.content) {
             for (const block of message.message.content) {
               if (block.type === 'text' && block.text) {
-                output += block.text;
+                appendOutput(block.text);
               }
             }
           } else if (message.type === 'error') {
@@ -96,7 +110,7 @@ The AI provider integration is working correctly.
               hasError = true;
               errorMessage = message.error || 'Execution failed';
             } else {
-              output += message.result || '';
+              appendOutput(message.result || '');
             }
           }
         }
@@ -110,7 +124,7 @@ The AI provider integration is working correctly.
       let fileCreated = false;
       let fileContent = '';
       try {
-        fileContent = await fs.readFile('/tmp/hello.md', 'utf-8');
+        fileContent = await fs.readFile(testFilePath, 'utf-8');
         fileCreated = true;
       } catch {
         // File not created
@@ -121,7 +135,7 @@ The AI provider integration is working correctly.
         provider: providerName,
         model,
         fileCreated,
-        filePath: '/tmp/hello.md',
+        filePath: testFilePath,
         fileContent: fileCreated ? fileContent : undefined,
         output: output.slice(0, 1000), // Limit output size
         error: hasError ? errorMessage : undefined,

@@ -36,7 +36,6 @@ export async function spawnProcess(options: SubprocessOptions): Promise<Subproce
 
   child.stderr?.on('data', (chunk) => {
     stderr += chunk.toString();
-    lastOutput = Date.now();
   });
 
   let aborted = false;

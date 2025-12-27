@@ -53,8 +53,7 @@ export class CodexConfigManager {
         continue;
       }
 
-      const header = `[mcp_servers.${name}]`;
-      if (content.includes(header)) {
+      if (this.hasServerBlock(content, name)) {
         continue;
       }
 
@@ -118,7 +117,7 @@ export class CodexConfigManager {
       if (envEntries.length > 0) {
         lines.push('', `[mcp_servers.${name}.env]`);
         for (const [key, value] of envEntries) {
-          lines.push(`${key} = ${this.formatValue(value)}`);
+          lines.push(`${this.formatKey(key)} = ${this.formatValue(value)}`);
         }
       }
     }
@@ -142,5 +141,18 @@ export class CodexConfigManager {
       return `"${escaped}"`;
     }
     return '""';
+  }
+
+  private formatKey(key: string): string {
+    if (/^[A-Za-z0-9_-]+$/.test(key)) {
+      return key;
+    }
+    return this.formatValue(key);
+  }
+
+  private hasServerBlock(content: string, name: string): boolean {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const headerRegex = new RegExp(`^\\[mcp_servers\\.${escaped}\\]$`, 'm');
+    return headerRegex.test(content);
   }
 }

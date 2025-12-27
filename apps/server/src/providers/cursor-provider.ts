@@ -81,7 +81,7 @@ export class CursorProvider extends BaseProvider {
     logger.debug(`[spawn] cursor-agent ${args.slice(0, 6).join(' ')}... [prompt truncated]`);
 
     // Spawn the cursor-agent process (NOT 'cursor agent')
-    console.log('[CursorProvider] Spawning cursor-agent process...');
+    logger.info('[CursorProvider] Spawning cursor-agent process...');
     // Use closed stdin to avoid the agent waiting for interactive input.
     const childProcess = spawn('cursor-agent', args, {
       cwd,
@@ -91,7 +91,7 @@ export class CursorProvider extends BaseProvider {
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    console.log('[CursorProvider] Process spawned, PID:', childProcess.pid);
+    logger.info('[CursorProvider] Process spawned, PID:', childProcess.pid);
     // Explicitly end stdin in case the process expects EOF to begin execution
     childProcess.stdin?.end();
 
@@ -117,7 +117,7 @@ export class CursorProvider extends BaseProvider {
           resolve({ code: code ?? 0, signal: signal ?? null })
         );
         childProcess.on('error', (err) => {
-          console.error('[CursorProvider] Process error:', err);
+          logger.error('[CursorProvider] Process error:', err);
           resolve({ code: 1, signal: null });
         });
       }
@@ -178,11 +178,11 @@ export class CursorProvider extends BaseProvider {
       };
     };
 
-    console.log('[CursorProvider] Starting to read stdout stream...');
+    logger.debug('[CursorProvider] Starting to read stdout stream...');
     let messageCount = 0;
     for await (const msg of this.readCursorStream(childProcess.stdout as NodeJS.ReadableStream)) {
       messageCount++;
-      console.log(`[CursorProvider] Received message #${messageCount}, type: ${msg.type}`);
+      logger.debug(`[CursorProvider] Received message #${messageCount}, type: ${msg.type}`);
       const contentBlocks = msg.message?.content ?? [];
 
       if (stdoutDebug.length < MAX_DEBUG_LINES) {
@@ -322,17 +322,17 @@ export class CursorProvider extends BaseProvider {
       crlfDelay: Infinity, // Handle both \n and \r\n
     });
 
-    console.log('[CursorProvider] readline interface created, starting to read lines...');
+    logger.debug('[CursorProvider] readline interface created, starting to read lines...');
 
     for await (const line of rl) {
-      console.log(`[CursorProvider] Raw line received: ${line.substring(0, 100)}...`);
+      logger.debug(`[CursorProvider] Raw line received: ${line.substring(0, 100)}...`);
       const msg = this.parseCursorLine(line);
       if (msg) {
         yield msg;
       }
     }
 
-    console.log('[CursorProvider] readline finished reading all lines');
+    logger.debug('[CursorProvider] readline finished reading all lines');
   }
 
   private parseCursorLine(line: string): ProviderMessage | null {
@@ -346,15 +346,15 @@ export class CursorProvider extends BaseProvider {
         const payload = JSON.parse(trimmed) as Record<string, unknown>;
         const msg = this.toProviderMessage(payload);
         if (msg) {
-          console.log(
+          logger.debug(
             `[CursorProvider] Parsed JSON message type: ${payload.type} -> ProviderMessage type: ${msg.type}`
           );
         } else {
-          console.log(`[CursorProvider] Parsed JSON type: ${payload.type} -> null (filtered)`);
+          logger.debug(`[CursorProvider] Parsed JSON type: ${payload.type} -> null (filtered)`);
         }
         return msg;
       } catch (error) {
-        console.warn(
+        logger.warn(
           '[CursorProvider] Failed to parse stream-json line, treating as text:',
           trimmed.substring(0, 100)
         );

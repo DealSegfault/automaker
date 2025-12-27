@@ -177,7 +177,7 @@ async function collectProviderText(stream: AsyncGenerator<any>): Promise<string>
         }
       }
     } else if (msg.type === 'result' && msg.subtype === 'success') {
-      if (!responseText && typeof msg.result === 'string') {
+      if (typeof msg.result === 'string') {
         responseText = msg.result;
       }
     } else if (msg.type === 'error') {

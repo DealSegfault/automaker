@@ -3,29 +3,17 @@
  */
 
 import type { Request, Response } from 'express';
-import { OpenCodeProvider } from '../../../providers/opencode-provider.js';
+import { getOpenCodeStatus } from '../get-opencode-status.js';
 import { getErrorMessage, logError } from '../common.js';
 
 export function createOpenCodeStatusHandler() {
   return async (_req: Request, res: Response): Promise<void> => {
     try {
-      const provider = new OpenCodeProvider();
-      const status = await provider.detectInstallation();
+      const status = await getOpenCodeStatus();
 
       res.json({
         success: true,
-        status: status.installed ? 'installed' : 'not_installed',
-        installed: status.installed,
-        method: status.method || 'cli',
-        version: status.version,
-        path: status.path,
-        auth: {
-          authenticated: status.authenticated ?? false,
-          method: status.authenticated ? 'cli' : 'none',
-          hasApiKey: status.hasApiKey ?? false,
-          apiKeyValid: status.hasApiKey ?? false,
-          hasEnvApiKey: false,
-        },
+        ...status,
       });
     } catch (error) {
       logError(error, 'OpenCode status check failed');

@@ -25,13 +25,22 @@ export function createInstallCursorHandler() {
 
       let output = '';
       let errorOutput = '';
+      const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB limit
 
       child.stdout?.on('data', (data) => {
-        output += data.toString();
+        if (output.length >= MAX_OUTPUT_SIZE) {
+          return;
+        }
+        const chunk = data.toString();
+        output += chunk.slice(0, MAX_OUTPUT_SIZE - output.length);
       });
 
       child.stderr?.on('data', (data) => {
-        errorOutput += data.toString();
+        if (errorOutput.length >= MAX_OUTPUT_SIZE) {
+          return;
+        }
+        const chunk = data.toString();
+        errorOutput += chunk.slice(0, MAX_OUTPUT_SIZE - errorOutput.length);
       });
 
       child.on('close', (code) => {

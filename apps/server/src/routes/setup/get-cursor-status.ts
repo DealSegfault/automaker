@@ -115,21 +115,23 @@ export async function getCursorStatus(): Promise<CursorStatus> {
 
   // Check for Cursor config directory (might have auth info)
   const cursorConfigDir = path.join(os.homedir(), '.cursor');
-  try {
-    // Check for auth.json or similar config files
-    const authFilePath = path.join(cursorConfigDir, 'auth.json');
-    await fs.access(authFilePath);
+  if (!auth.authenticated) {
+    try {
+      // Check for auth.json or similar config files
+      const authFilePath = path.join(cursorConfigDir, 'auth.json');
+      await fs.access(authFilePath);
 
-    const authContent = await fs.readFile(authFilePath, 'utf-8');
-    const authData = JSON.parse(authContent);
+      const authContent = await fs.readFile(authFilePath, 'utf-8');
+      const authData = JSON.parse(authContent);
 
-    if (authData.api_key || authData.accessToken || authData.token) {
-      auth.authenticated = true;
-      auth.hasApiKey = true;
-      auth.method = 'config_file';
+      if (authData.api_key || authData.accessToken || authData.token) {
+        auth.authenticated = true;
+        auth.hasApiKey = true;
+        auth.method = 'config_file';
+      }
+    } catch {
+      // Auth file doesn't exist or is invalid
     }
-  } catch {
-    // Auth file doesn't exist or is invalid
   }
 
   return {
