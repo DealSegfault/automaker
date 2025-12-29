@@ -581,7 +581,17 @@ import { spawnJSONLProcess } from '../lib/subprocess-manager.js';
 
 const stream = spawnJSONLProcess({
   command: 'codex',
-  args: ['exec', '--model', 'gpt-5.2', '--json', '--full-auto', 'Fix the bug'],
+  args: [
+    'exec',
+    '--model',
+    'gpt-5.2',
+    '--json',
+    '--sandbox',
+    'workspace-write',
+    '--ask-for-approval',
+    'never',
+    'Fix the bug',
+  ],
   cwd: '/project/path',
   env: { OPENAI_API_KEY: 'sk-...' },
   abortController: new AbortController(),

@@ -1,7 +1,7 @@
 /**
  * Codex Provider - Executes queries using OpenAI Codex CLI (JSON streaming)
  *
- * Spawns `codex exec --json --full-auto` and streams JSONL events into ProviderMessage.
+ * Spawns `codex exec --json --sandbox <mode> --ask-for-approval never` and streams JSONL events into ProviderMessage.
  */
 
 import { exec } from 'child_process';
@@ -34,8 +34,18 @@ export class CodexProvider extends BaseProvider {
    * Execute a query using Codex CLI streaming output
    */
   async *executeQuery(options: ExecuteOptions): AsyncGenerator<ProviderMessage> {
-    const { prompt, model, cwd, systemPrompt, abortController, conversationHistory, mcpServers } =
-      options;
+    const {
+      prompt,
+      model,
+      cwd,
+      systemPrompt,
+      abortController,
+      conversationHistory,
+      mcpServers,
+      allowedTools,
+      sandbox,
+      timeoutMs,
+    } = options;
 
     const effectiveModel = this.mapModelToCodexFormat(model || 'gpt-5.2-codex');
 
@@ -61,7 +71,17 @@ export class CodexProvider extends BaseProvider {
       }
     }
 
-    const args = ['exec', '--model', effectiveModel, '--json', '--full-auto'];
+    const sandboxMode = this.resolveSandboxMode(allowedTools, sandbox);
+    const args = [
+      'exec',
+      '--model',
+      effectiveModel,
+      '--json',
+      '--sandbox',
+      sandboxMode,
+      '--ask-for-approval',
+      'never',
+    ];
     if (promptText.trim().length > 0) {
       args.push(promptText);
     }
@@ -74,7 +94,11 @@ export class CodexProvider extends BaseProvider {
 
     const envOverrides: Record<string, string> = { ...this.config.env };
     if (this.config.apiKey) {
+      envOverrides.CODEX_API_KEY = this.config.apiKey;
       envOverrides.OPENAI_API_KEY = this.config.apiKey;
+    }
+    if (envOverrides.OPENAI_API_KEY && !envOverrides.CODEX_API_KEY) {
+      envOverrides.CODEX_API_KEY = envOverrides.OPENAI_API_KEY;
     }
 
     try {
@@ -84,7 +108,7 @@ export class CodexProvider extends BaseProvider {
         cwd,
         env: envOverrides,
         abortController,
-        timeout: this.getCliTimeoutMs(),
+        timeout: timeoutMs ?? this.getCliTimeoutMs(),
       });
 
       for await (const event of stream) {
@@ -470,6 +494,7 @@ export class CodexProvider extends BaseProvider {
         if (!command) {
           return [];
         }
+        const toolUseId = this.getString(item, 'id');
         return [
           {
             type: 'assistant',
@@ -480,6 +505,7 @@ export class CodexProvider extends BaseProvider {
                   type: 'tool_use',
                   name: 'bash',
                   input: { command },
+                  ...(toolUseId ? { tool_use_id: toolUseId } : {}),
                 },
               ],
             },
@@ -561,13 +587,53 @@ export class CodexProvider extends BaseProvider {
   }
 
   private extractItemText(item: Record<string, unknown>): string {
-    return (
+    const direct =
       this.getString(item, 'text') ||
       this.getString(item, 'content') ||
       this.getString(item, 'message') ||
-      this.getString(item, 'output') ||
-      ''
-    );
+      this.getString(item, 'output');
+    if (direct) {
+      return direct;
+    }
+
+    const content = this.extractTextFromContent(item.content);
+    if (content) {
+      return content;
+    }
+
+    const message = item.message;
+    if (message && typeof message === 'object') {
+      const messageText = this.extractTextFromContent((message as Record<string, unknown>).content);
+      if (messageText) {
+        return messageText;
+      }
+    }
+
+    return '';
+  }
+
+  private extractTextFromContent(content: unknown): string {
+    if (!content) {
+      return '';
+    }
+    if (typeof content === 'string') {
+      return content;
+    }
+    if (!Array.isArray(content)) {
+      return '';
+    }
+
+    const parts = content
+      .map((block) => {
+        if (!block || typeof block !== 'object') {
+          return '';
+        }
+        const record = block as Record<string, unknown>;
+        return this.getString(record, 'text') || this.getString(record, 'content') || '';
+      })
+      .filter(Boolean);
+
+    return parts.join('');
   }
 
   private extractCommand(item: Record<string, unknown>): string {
@@ -593,8 +659,7 @@ export class CodexProvider extends BaseProvider {
 
   private formatCommandExecution(item: Record<string, unknown>): string {
     const command = this.extractCommand(item);
-    const stdout = this.getString(item, 'stdout') || this.getString(item, 'output');
-    const stderr = this.getString(item, 'stderr');
+    const { stdout, stderr } = this.extractCommandOutput(item);
     const exitCode =
       typeof item.exit_code === 'number'
         ? item.exit_code
@@ -617,6 +682,37 @@ export class CodexProvider extends BaseProvider {
     }
 
     return parts.join('\n\n');
+  }
+
+  private extractCommandOutput(item: Record<string, unknown>): {
+    stdout?: string;
+    stderr?: string;
+  } {
+    let stdout =
+      this.getString(item, 'aggregated_output') ||
+      this.getString(item, 'aggregatedOutput') ||
+      this.getString(item, 'stdout') ||
+      this.getString(item, 'output');
+    let stderr = this.getString(item, 'stderr');
+
+    const output = item.output;
+    if (output && typeof output === 'object') {
+      const outputRecord = output as Record<string, unknown>;
+      if (!stdout) {
+        stdout =
+          this.getString(outputRecord, 'stdout') ||
+          this.getString(outputRecord, 'output') ||
+          this.getString(outputRecord, 'text');
+      }
+      if (!stderr) {
+        stderr = this.getString(outputRecord, 'stderr');
+      }
+    }
+
+    return {
+      stdout,
+      stderr,
+    };
   }
 
   private formatTodoUpdate(item: Record<string, unknown>): string {
@@ -674,6 +770,30 @@ export class CodexProvider extends BaseProvider {
     return text;
   }
 
+  private resolveSandboxMode(
+    allowedTools?: string[],
+    sandbox?: { enabled?: boolean }
+  ): 'read-only' | 'workspace-write' | 'danger-full-access' {
+    if (sandbox && sandbox.enabled === false) {
+      return 'danger-full-access';
+    }
+
+    const needsWrite = this.needsWriteAccess(allowedTools);
+    return needsWrite ? 'workspace-write' : 'read-only';
+  }
+
+  private needsWriteAccess(allowedTools?: string[]): boolean {
+    if (!allowedTools) {
+      return true;
+    }
+    if (allowedTools.length === 0) {
+      return false;
+    }
+
+    const writeTools = new Set(['Write', 'Edit', 'Bash', 'WebSearch', 'WebFetch']);
+    return allowedTools.some((tool) => writeTools.has(tool));
+  }
+
   private formatExecutionError(error: unknown): string {
     if (error && typeof error === 'object' && 'code' in error) {
       const code = (error as { code?: string }).code;
@@ -701,7 +821,12 @@ export class CodexProvider extends BaseProvider {
 
   private async checkAuthentication(): Promise<{ authenticated: boolean; hasApiKey: boolean }> {
     const envKey =
-      process.env.OPENAI_API_KEY || this.config.apiKey || this.config.env?.OPENAI_API_KEY || '';
+      process.env.CODEX_API_KEY ||
+      process.env.OPENAI_API_KEY ||
+      this.config.apiKey ||
+      this.config.env?.CODEX_API_KEY ||
+      this.config.env?.OPENAI_API_KEY ||
+      '';
     const hasApiKey = !!envKey;
 
     const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');

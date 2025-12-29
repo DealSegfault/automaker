@@ -231,7 +231,7 @@ Spawns OpenAI Codex CLI as a subprocess and converts JSONL output to provider fo
 
 #### Features
 
-- ✅ Subprocess execution (`codex exec --model <model> --json --full-auto`)
+- ✅ Subprocess execution (`codex exec --model <model> --json --sandbox <mode> --ask-for-approval never`)
 - ✅ JSONL stream parsing
 - ✅ Supports GPT-5.1/5.2 Codex models
 - ✅ Vision support (GPT-5.1, GPT-5.2)
