@@ -1,14 +1,14 @@
 /**
  * Business logic for generating suggestions
  *
- * Model is configurable via phaseModels.enhancementModel in settings
- * (Feature Enhancement in the UI). Supports both Claude and Cursor models.
+ * Model is configurable via phaseModels.suggestionsModel in settings
+ * (AI Suggestions in the UI). Supports both Claude and Cursor models.
  */
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { EventEmitter } from '../../lib/events.js';
 import { createLogger } from '@automaker/utils';
-import { DEFAULT_PHASE_MODELS, isCursorModel } from '@automaker/types';
+import { DEFAULT_PHASE_MODELS, isCursorModel, type ThinkingLevel } from '@automaker/types';
 import { resolvePhaseModel } from '@automaker/model-resolver';
 import { createSuggestionsOptions } from '../../lib/sdk-options.js';
 import { extractJsonWithArray } from '../../lib/json-extractor.js';
@@ -135,7 +135,9 @@ export async function generateSuggestions(
   suggestionType: string,
   events: EventEmitter,
   abortController: AbortController,
-  settingsService?: SettingsService
+  settingsService?: SettingsService,
+  modelOverride?: string,
+  thinkingLevelOverride?: ThinkingLevel
 ): Promise<void> {
   const typePrompts: Record<string, string> = {
     features: 'Analyze this project and suggest new features that would add value.',
@@ -171,11 +173,28 @@ The response will be automatically formatted as structured JSON.`;
     '[Suggestions]'
   );
 
-  // Get model from phase settings (Feature Enhancement = enhancementModel)
+  // Get model from phase settings (AI Suggestions = suggestionsModel)
+  // Use override if provided, otherwise fall back to settings
   const settings = await settingsService?.getGlobalSettings();
-  const phaseModelEntry =
-    settings?.phaseModels?.enhancementModel || DEFAULT_PHASE_MODELS.enhancementModel;
-  const { model, thinkingLevel } = resolvePhaseModel(phaseModelEntry);
+  let model: string;
+  let thinkingLevel: ThinkingLevel | undefined;
+
+  if (modelOverride) {
+    // Use explicit override - resolve the model string
+    const resolved = resolvePhaseModel({
+      model: modelOverride,
+      thinkingLevel: thinkingLevelOverride,
+    });
+    model = resolved.model;
+    thinkingLevel = resolved.thinkingLevel;
+  } else {
+    // Use settings-based model
+    const phaseModelEntry =
+      settings?.phaseModels?.suggestionsModel || DEFAULT_PHASE_MODELS.suggestionsModel;
+    const resolved = resolvePhaseModel(phaseModelEntry);
+    model = resolved.model;
+    thinkingLevel = resolved.thinkingLevel;
+  }
 
   logger.info('[Suggestions] Using model:', model);
 

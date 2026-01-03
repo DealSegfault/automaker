@@ -139,6 +139,8 @@ export interface PhaseModelConfig {
   backlogPlanningModel: PhaseModelEntry;
   /** Model for analyzing project structure */
   projectAnalysisModel: PhaseModelEntry;
+  /** Model for AI suggestions (feature, refactoring, security, performance) */
+  suggestionsModel: PhaseModelEntry;
 }
 
 /** Keys of PhaseModelConfig for type-safe access */
@@ -608,6 +610,7 @@ export const DEFAULT_PHASE_MODELS: PhaseModelConfig = {
   featureGenerationModel: { model: 'sonnet' },
   backlogPlanningModel: { model: 'sonnet' },
   projectAnalysisModel: { model: 'sonnet' },
+  suggestionsModel: { model: 'sonnet' },
 };
 
 /** Current version of the global settings schema */

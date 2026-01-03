@@ -34,6 +34,8 @@ import {
 import { useAppStore, Feature } from '@/store/app-store';
 import { toast } from 'sonner';
 import { LogViewer } from '@/components/ui/log-viewer';
+import { useModelOverride } from '@/components/shared/use-model-override';
+import { ModelOverrideTrigger } from '@/components/shared/model-override-trigger';
 
 const logger = createLogger('FeatureSuggestions');
 
@@ -104,6 +106,11 @@ export function FeatureSuggestionsDialog({
 
   const { features, setFeatures } = useAppStore();
 
+  // Model override for suggestions
+  const { effectiveModelEntry, isOverridden, setOverride } = useModelOverride({
+    phase: 'suggestionsModel',
+  });
+
   // Initialize selectedIds when suggestions change
   useEffect(() => {
     if (suggestions.length > 0 && selectedIds.size === 0) {
@@ -173,7 +180,13 @@ export function FeatureSuggestionsDialog({
       setCurrentSuggestionType(suggestionType);
 
       try {
-        const result = await api.suggestions.generate(projectPath, suggestionType);
+        // Pass model and thinkingLevel from the effective model entry
+        const result = await api.suggestions.generate(
+          projectPath,
+          suggestionType,
+          effectiveModelEntry.model,
+          effectiveModelEntry.thinkingLevel
+        );
         if (!result.success) {
           toast.error(result.error || 'Failed to start generation');
           setIsGenerating(false);
@@ -184,7 +197,7 @@ export function FeatureSuggestionsDialog({
         setIsGenerating(false);
       }
     },
-    [projectPath, setIsGenerating, setSuggestions]
+    [projectPath, setIsGenerating, setSuggestions, effectiveModelEntry]
   );
 
   // Stop generating
@@ -330,6 +343,14 @@ export function FeatureSuggestionsDialog({
                 AI Suggestions
               </>
             )}
+            <ModelOverrideTrigger
+              currentModelEntry={effectiveModelEntry}
+              onModelChange={setOverride}
+              phase="suggestionsModel"
+              isOverridden={isOverridden}
+              size="sm"
+              variant="icon"
+            />
           </DialogTitle>
           <DialogDescription>
             {currentConfig

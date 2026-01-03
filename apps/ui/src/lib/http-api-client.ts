@@ -1305,8 +1305,13 @@ export class HttpApiClient implements ElectronAPI {
 
   // Suggestions API
   suggestions: SuggestionsAPI = {
-    generate: (projectPath: string, suggestionType?: SuggestionType) =>
-      this.post('/api/suggestions/generate', { projectPath, suggestionType }),
+    generate: (
+      projectPath: string,
+      suggestionType?: SuggestionType,
+      model?: string,
+      thinkingLevel?: string
+    ) =>
+      this.post('/api/suggestions/generate', { projectPath, suggestionType, model, thinkingLevel }),
     stop: () => this.post('/api/suggestions/stop'),
     status: () => this.get('/api/suggestions/status'),
     onEvent: (callback: (event: SuggestionsEvent) => void) => {

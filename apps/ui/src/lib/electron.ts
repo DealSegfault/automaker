@@ -14,6 +14,7 @@ import type {
   ModelAlias,
   GitHubComment,
   IssueCommentsResult,
+  ThinkingLevel,
 } from '@automaker/types';
 import { getJSON, setJSON, removeItem } from './storage';
 
@@ -282,7 +283,9 @@ export type SuggestionType = 'features' | 'refactoring' | 'security' | 'performa
 export interface SuggestionsAPI {
   generate: (
     projectPath: string,
-    suggestionType?: SuggestionType
+    suggestionType?: SuggestionType,
+    model?: string,
+    thinkingLevel?: ThinkingLevel
   ) => Promise<{ success: boolean; error?: string }>;
   stop: () => Promise<{ success: boolean; error?: string }>;
   status: () => Promise<{
@@ -2065,7 +2068,12 @@ let mockSuggestionsTimeout: NodeJS.Timeout | null = null;
 
 function createMockSuggestionsAPI(): SuggestionsAPI {
   return {
-    generate: async (projectPath: string, suggestionType: SuggestionType = 'features') => {
+    generate: async (
+      projectPath: string,
+      suggestionType: SuggestionType = 'features',
+      model?: string,
+      thinkingLevel?: ThinkingLevel
+    ) => {
       if (mockSuggestionsRunning) {
         return {
           success: false,
@@ -2074,7 +2082,11 @@ function createMockSuggestionsAPI(): SuggestionsAPI {
       }
 
       mockSuggestionsRunning = true;
-      logger.info(`Mock generating ${suggestionType} suggestions for: ${projectPath}`);
+      logger.info(
+        `Mock generating ${suggestionType} suggestions for: ${projectPath}` +
+          (model ? ` with model: ${model}` : '') +
+          (thinkingLevel ? ` thinkingLevel: ${thinkingLevel}` : '')
+      );
 
       // Simulate async suggestion generation
       simulateSuggestionsGeneration(suggestionType);
