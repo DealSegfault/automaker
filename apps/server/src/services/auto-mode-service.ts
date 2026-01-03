@@ -612,7 +612,7 @@ export class AutoModeService {
       );
 
       // Get model from feature
-      const model = resolveModelString(feature.model, DEFAULT_MODELS.claude);
+      const model = resolveModelString(feature.model, this.getDefaultFeatureModel());
       console.log(`[AutoMode] Executing feature ${featureId} with model: ${model} in ${workDir}`);
 
       // Run the agent with the feature's model and images
@@ -751,7 +751,7 @@ export class AutoModeService {
       const prompt = this.buildPipelineStepPrompt(step, feature, previousContext);
 
       // Get model from feature
-      const model = resolveModelString(feature.model, DEFAULT_MODELS.claude);
+      const model = resolveModelString(feature.model, this.getDefaultFeatureModel());
 
       // Run the agent for this pipeline step
       await this.runAgent(
@@ -988,7 +988,7 @@ Address the follow-up instructions above. Review the previous work and make the 
 
     try {
       // Get model from feature (already loaded above)
-      const model = resolveModelString(feature?.model, DEFAULT_MODELS.claude);
+      const model = resolveModelString(feature?.model, this.getDefaultFeatureModel());
       console.log(`[AutoMode] Follow-up for feature ${featureId} using model: ${model}`);
 
       // Update feature status to in_progress
@@ -1754,6 +1754,14 @@ Format your response as a structured markdown document.`;
 
     // Truncate to 60 characters and add ellipsis
     return firstLine.substring(0, 57) + '...';
+  }
+
+  /**
+   * Determine the fallback model when a feature doesn't specify one.
+   */
+  private getDefaultFeatureModel(): string {
+    const defaultProvider = ProviderFactory.getDefaultProvider();
+    return DEFAULT_MODELS[defaultProvider] || DEFAULT_MODELS.claude;
   }
 
   /**

@@ -106,8 +106,11 @@ IMPORTANT: Do not ask for clarification. The specification is provided above. Ge
     process.env.AUTOMAKER_MODEL_FEATURES || process.env.AUTOMAKER_MODEL_DEFAULT
   );
   let featureModel = getModelForUseCase('features');
-  if (!hasModelOverride && ProviderFactory.getDefaultProvider() === 'codex') {
-    featureModel = DEFAULT_MODELS.codex;
+  if (!hasModelOverride) {
+    const defaultProvider = ProviderFactory.getDefaultProvider();
+    if (defaultProvider !== 'claude') {
+      featureModel = DEFAULT_MODELS[defaultProvider] || DEFAULT_MODELS.claude;
+    }
   }
 
   const options = createFeatureGenerationOptions({

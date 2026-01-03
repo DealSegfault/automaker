@@ -13,6 +13,8 @@ import type {
   AgentModel,
   GitHubComment,
   IssueCommentsResult,
+  BacklogPlanResult,
+  BacklogPlanEvent,
 } from '@automaker/types';
 import { getJSON, setJSON, removeItem } from './storage';
 
@@ -28,6 +30,8 @@ export type {
   StoredValidation,
   GitHubComment,
   IssueCommentsResult,
+  BacklogPlanResult,
+  BacklogPlanEvent,
 };
 
 export interface FileEntry {

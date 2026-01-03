@@ -9,6 +9,7 @@ import {
   OPENCODE_MODELS,
   CODEX_MODELS,
 } from '@/components/views/board-view/shared/model-constants';
+import { resolveModelString } from '@automaker/model-resolver';
 import {
   Select,
   SelectContent,
@@ -33,6 +34,7 @@ export function AIProviderSection({
   onProviderChange,
   onModelChange,
 }: AIProviderSectionProps) {
+  const normalizedDefaultModel = resolveModelString(defaultModel);
   const models =
     defaultProvider === 'cursor'
       ? CURSOR_MODELS
@@ -85,13 +87,13 @@ export function AIProviderSection({
     onProviderChange(provider);
     // Set a sensible default model for the new provider
     if (provider === 'cursor') {
-      onModelChange('auto');
+      onModelChange(resolveModelString('auto') as AgentModel);
     } else if (provider === 'codex') {
-      onModelChange('gpt-5.2-codex');
+      onModelChange(resolveModelString('gpt-5.2-codex') as AgentModel);
     } else if (provider === 'opencode') {
-      onModelChange('glm4.7');
+      onModelChange(resolveModelString('glm4.7') as AgentModel);
     } else {
-      onModelChange('sonnet');
+      onModelChange(resolveModelString('sonnet') as AgentModel);
     }
 
     // Sync with backend
@@ -190,15 +192,15 @@ export function AIProviderSection({
             <div className="flex items-center justify-between">
               <Label className="text-foreground font-medium">Default Model</Label>
               <Select
-                value={defaultModel}
-                onValueChange={(v: string) => onModelChange(v as AgentModel)}
+                value={normalizedDefaultModel}
+                onValueChange={(v: string) => onModelChange(resolveModelString(v) as AgentModel)}
               >
                 <SelectTrigger className="w-[180px] h-8" data-testid="default-model-select">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   {models.map((model) => (
-                    <SelectItem key={model.id} value={model.id}>
+                    <SelectItem key={model.id} value={resolveModelString(model.id)}>
                       <div className="flex items-center gap-2">
                         <span>{model.label}</span>
                         {model.badge && (
@@ -211,8 +213,8 @@ export function AIProviderSection({
               </Select>
             </div>
             <p className="text-xs text-muted-foreground/80 leading-relaxed">
-              {models.find((m) => m.id === defaultModel)?.description ||
-                'Select the default model for new features.'}
+              {models.find((m) => resolveModelString(m.id) === normalizedDefaultModel)
+                ?.description || 'Select the default model for new features.'}
             </p>
           </div>
         </div>

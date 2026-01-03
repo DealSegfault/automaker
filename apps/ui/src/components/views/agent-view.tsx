@@ -49,8 +49,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { CLAUDE_MODELS } from '@/components/views/board-view/shared/model-constants';
+import { CLAUDE_MODELS } from '@automaker/types';
 import { Textarea } from '@/components/ui/textarea';
+import { resolveModelString } from '@automaker/model-resolver';
 
 export function AgentView() {
   const { currentProject, setLastSelectedSession, getLastSelectedSession } = useAppStore();
@@ -90,7 +91,7 @@ export function AgentView() {
   } = useElectronAgent({
     sessionId: currentSessionId || '',
     workingDirectory: currentProject?.path,
-    model: selectedModel,
+    model: resolveModelString(selectedModel),
     onToolUse: (toolName) => {
       setCurrentTool(toolName);
       setTimeout(() => setCurrentTool(null), 2000);

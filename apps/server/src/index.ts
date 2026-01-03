@@ -141,7 +141,7 @@ const mcpTestService = new MCPTestService(settingsService);
 
 // Run stale validation cleanup every hour to prevent memory leaks from crashed validations
 const VALIDATION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
-setInterval(() => {
+const validationCleanupInterval = setInterval(() => {
   const cleaned = cleanupStaleValidations();
   if (cleaned > 0) {
     console.log(`[Server] Cleaned up ${cleaned} stale validation entries`);
@@ -501,6 +501,7 @@ startServer(PORT);
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down...');
+  clearInterval(validationCleanupInterval);
   terminalService.cleanup();
   server.close(() => {
     console.log('Server closed');
@@ -510,6 +511,7 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   console.log('SIGINT received, shutting down...');
+  clearInterval(validationCleanupInterval);
   terminalService.cleanup();
   server.close(() => {
     console.log('Server closed');

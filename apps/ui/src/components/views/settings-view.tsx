@@ -88,8 +88,8 @@ export function SettingsView() {
   // Handler to set theme - always updates global theme (user's preference),
   // and also sets per-project theme if a project is selected
   const handleSetTheme = (newTheme: Theme) => {
-    // Convert Theme to ThemeMode (ThemeMode is a subset of Theme)
-    // If the theme is not in ThemeMode, we'll use it as-is and let the store handle it
+    // ThemeMode includes 'system'; Theme is a strict subset.
+    // Safe to widen since all Theme values are valid ThemeMode values.
     const themeMode = newTheme as ThemeMode;
     // Always update global theme so user's preference persists across all projects
     setTheme(themeMode);

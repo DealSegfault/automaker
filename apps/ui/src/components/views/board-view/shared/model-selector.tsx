@@ -2,6 +2,7 @@ import { Label } from '@/components/ui/label';
 import { Brain, Wand2, Code2, Terminal } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { AgentModel, ModelProvider } from '@/store/app-store';
+import { resolveModelString } from '@automaker/model-resolver';
 import {
   CLAUDE_MODELS,
   CURSOR_MODELS,
@@ -27,21 +28,22 @@ export function ModelSelector({
   testIdPrefix = 'model-select',
   showProviderSelector = true,
 }: ModelSelectorProps) {
+  const normalizedSelectedModel = resolveModelString(selectedModel);
   const inferProvider = (): ModelProvider => {
-    if (CODEX_MODELS.some((model) => model.id === selectedModel)) {
+    if (CODEX_MODELS.some((model) => resolveModelString(model.id) === normalizedSelectedModel)) {
       return 'codex';
     }
-    if (OPENCODE_MODELS.some((model) => model.id === selectedModel)) {
+    if (OPENCODE_MODELS.some((model) => resolveModelString(model.id) === normalizedSelectedModel)) {
       return 'opencode';
     }
-    if (CURSOR_MODELS.some((model) => model.id === selectedModel)) {
+    if (CURSOR_MODELS.some((model) => resolveModelString(model.id) === normalizedSelectedModel)) {
       return 'cursor';
     }
-    if (CLAUDE_MODELS.some((model) => model.id === selectedModel)) {
+    if (CLAUDE_MODELS.some((model) => resolveModelString(model.id) === normalizedSelectedModel)) {
       return 'claude';
     }
 
-    const lowerModel = selectedModel.toLowerCase?.() ?? '';
+    const lowerModel = normalizedSelectedModel.toLowerCase?.() ?? '';
     if (lowerModel.startsWith('gpt-') || /^o\d/.test(lowerModel)) {
       return 'codex';
     }
@@ -82,7 +84,7 @@ export function ModelSelector({
             type="button"
             onClick={() => {
               onProviderSelect?.('cursor');
-              onModelSelect('auto');
+              onModelSelect(resolveModelString('auto') as AgentModel);
             }}
             className={cn(
               'flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md border text-sm font-medium transition-colors',
@@ -99,7 +101,7 @@ export function ModelSelector({
             type="button"
             onClick={() => {
               onProviderSelect?.('codex');
-              onModelSelect('gpt-5.2-codex');
+              onModelSelect(resolveModelString('gpt-5.2-codex') as AgentModel);
             }}
             className={cn(
               'flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md border text-sm font-medium transition-colors',
@@ -116,7 +118,7 @@ export function ModelSelector({
             type="button"
             onClick={() => {
               onProviderSelect?.('opencode');
-              onModelSelect('glm4.7');
+              onModelSelect(resolveModelString('glm4.7') as AgentModel);
             }}
             className={cn(
               'flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md border text-sm font-medium transition-colors',
@@ -133,7 +135,7 @@ export function ModelSelector({
             type="button"
             onClick={() => {
               onProviderSelect?.('claude');
-              onModelSelect('opus');
+              onModelSelect(resolveModelString('opus') as AgentModel);
             }}
             className={cn(
               'flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md border text-sm font-medium transition-colors',
@@ -161,13 +163,14 @@ export function ModelSelector({
       </div>
       <div className="flex gap-2 flex-wrap">
         {models.map((option) => {
-          const isSelected = selectedModel === option.id;
+          const resolvedOptionId = resolveModelString(option.id);
+          const isSelected = normalizedSelectedModel === resolvedOptionId;
           const shortName = option.label.replace('Claude ', '').replace('Cursor ', '');
           return (
             <button
               key={option.id}
               type="button"
-              onClick={() => onModelSelect(option.id)}
+              onClick={() => onModelSelect(resolvedOptionId as AgentModel)}
               title={option.description}
               className={cn(
                 'flex-1 min-w-[80px] px-3 py-2 rounded-md border text-sm font-medium transition-colors',

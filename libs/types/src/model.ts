@@ -58,8 +58,14 @@ export type CodexModelAlias = keyof typeof CODEX_MODEL_MAP;
 
 export type ModelAlias = ClaudeModelAlias | CursorModelAlias | OpenCodeModelAlias | CodexModelAlias;
 
+export type ModelId =
+  | (typeof CLAUDE_MODEL_MAP)[keyof typeof CLAUDE_MODEL_MAP]
+  | (typeof CURSOR_MODEL_MAP)[keyof typeof CURSOR_MODEL_MAP]
+  | (typeof OPENCODE_MODEL_MAP)[keyof typeof OPENCODE_MODEL_MAP]
+  | (typeof CODEX_MODEL_MAP)[keyof typeof CODEX_MODEL_MAP];
+
 /**
  * AgentModel - Alias for ModelAlias for backward compatibility
  * Represents available model aliases across providers
  */
-export type AgentModel = ModelAlias;
+export type AgentModel = ModelAlias | ModelId;

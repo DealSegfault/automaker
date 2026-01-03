@@ -1623,11 +1623,21 @@ export const useAppStore = create<AppState & AppActions>()(
               console.error('[AppStore] Failed to sync provider with backend:', err);
             });
         });
+        import('@/hooks/use-settings-migration').then(({ syncSettingsToServer }) => {
+          syncSettingsToServer().catch((err) => {
+            console.error('[AppStore] Failed to persist provider settings:', err);
+          });
+        });
       },
       setDefaultModel: (model) => {
         set({ defaultModel: model });
         // Log the change (backend uses defaultModel based on defaultProvider)
         console.log('[AppStore] Default model updated:', model);
+        import('@/hooks/use-settings-migration').then(({ syncSettingsToServer }) => {
+          syncSettingsToServer().catch((err) => {
+            console.error('[AppStore] Failed to persist model settings:', err);
+          });
+        });
       },
 
       // Validation Model actions
