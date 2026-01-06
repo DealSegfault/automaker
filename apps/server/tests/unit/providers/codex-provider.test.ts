@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import os from 'os';
 import path from 'path';
-import { CodexProvider } from '@/providers/codex-provider.js';
+import { CodexProvider } from '../../../src/providers/codex-provider.js';
+import type { ProviderMessage } from '../../../src/providers/types.js';
 import { collectAsyncGenerator } from '../../utils/helpers.js';
 import {
   spawnJSONLProcess,
@@ -12,12 +13,25 @@ import {
 } from '@automaker/platform';
 
 const OPENAI_API_KEY_ENV = 'OPENAI_API_KEY';
-const openaiCreateMock = vi.fn();
 const originalOpenAIKey = process.env[OPENAI_API_KEY_ENV];
 
-vi.mock('openai', () => ({
-  default: class {
-    responses = { create: openaiCreateMock };
+const codexRunMock = vi.fn();
+
+vi.mock('@openai/codex-sdk', () => ({
+  Codex: class {
+    constructor(_opts: { apiKey: string }) {}
+    startThread() {
+      return {
+        id: 'thread-123',
+        run: codexRunMock,
+      };
+    }
+    resumeThread() {
+      return {
+        id: 'thread-123',
+        run: codexRunMock,
+      };
+    }
   },
 }));
 
@@ -28,6 +42,7 @@ vi.mock('@automaker/platform', () => ({
   spawnProcess: vi.fn(),
   findCodexCliPath: vi.fn(),
   getCodexAuthIndicators: vi.fn().mockResolvedValue({
+    hasAuthFile: false,
     hasOAuthToken: false,
     hasApiKey: false,
   }),
@@ -68,6 +83,7 @@ describe('codex-provider.ts', () => {
     vi.mocked(getCodexConfigDir).mockReturnValue('/home/test/.codex');
     vi.mocked(findCodexCliPath).mockResolvedValue('/usr/bin/codex');
     vi.mocked(getCodexAuthIndicators).mockResolvedValue({
+      hasAuthFile: true,
       hasOAuthToken: true,
       hasApiKey: false,
     });
@@ -103,7 +119,7 @@ describe('codex-provider.ts', () => {
           }
         })()
       );
-      const results = await collectAsyncGenerator(
+      const results = await collectAsyncGenerator<ProviderMessage>(
         provider.executeQuery({
           prompt: 'List files',
           model: 'gpt-5.2',
@@ -207,7 +223,7 @@ describe('codex-provider.ts', () => {
       );
 
       const call = vi.mocked(spawnJSONLProcess).mock.calls[0][0];
-      const promptText = call.args[call.args.length - 1];
+      const promptText = call.stdinData;
       expect(promptText).toContain('User rules');
       expect(promptText).toContain('Project rules');
     });
@@ -232,13 +248,9 @@ describe('codex-provider.ts', () => {
 
     it('uses the SDK when no tools are requested and an API key is present', async () => {
       process.env[OPENAI_API_KEY_ENV] = 'sk-test';
-      openaiCreateMock.mockResolvedValue({
-        id: 'resp-123',
-        output_text: 'Hello from SDK',
-        error: null,
-      });
+      codexRunMock.mockResolvedValue({ finalResponse: 'Hello from SDK' });
 
-      const results = await collectAsyncGenerator(
+      const results = await collectAsyncGenerator<ProviderMessage>(
         provider.executeQuery({
           prompt: 'Hello',
           model: 'gpt-5.2',
@@ -247,9 +259,6 @@ describe('codex-provider.ts', () => {
         })
       );
 
-      expect(openaiCreateMock).toHaveBeenCalled();
-      const request = openaiCreateMock.mock.calls[0][0];
-      expect(request.tool_choice).toBe('none');
       expect(results[0].message?.content[0].text).toBe('Hello from SDK');
       expect(results[1].result).toBe('Hello from SDK');
     });
@@ -267,7 +276,7 @@ describe('codex-provider.ts', () => {
         })
       );
 
-      expect(openaiCreateMock).not.toHaveBeenCalled();
+      expect(codexRunMock).not.toHaveBeenCalled();
       expect(spawnJSONLProcess).toHaveBeenCalled();
     });
 
@@ -283,7 +292,7 @@ describe('codex-provider.ts', () => {
         })
       );
 
-      expect(openaiCreateMock).not.toHaveBeenCalled();
+      expect(codexRunMock).not.toHaveBeenCalled();
       expect(spawnJSONLProcess).toHaveBeenCalled();
     });
   });

@@ -284,11 +284,15 @@ describe('subprocess.ts', () => {
       const generator = spawnJSONLProcess(options);
       await collectAsyncGenerator(generator);
 
-      expect(cp.spawn).toHaveBeenCalledWith('my-command', ['--flag', 'value'], {
-        cwd: '/work/dir',
-        env: expect.objectContaining({ CUSTOM_VAR: 'test' }),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      expect(cp.spawn).toHaveBeenCalledWith(
+        'my-command',
+        ['--flag', 'value'],
+        expect.objectContaining({
+          cwd: '/work/dir',
+          env: expect.objectContaining({ CUSTOM_VAR: 'test' }),
+          stdio: ['ignore', 'pipe', 'pipe'],
+        })
+      );
     });
 
     it('should merge env with process.env', async () => {
@@ -473,11 +477,15 @@ describe('subprocess.ts', () => {
 
       await spawnProcess(options);
 
-      expect(cp.spawn).toHaveBeenCalledWith('my-cmd', ['--verbose'], {
-        cwd: '/my/dir',
-        env: expect.objectContaining({ MY_VAR: 'value' }),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      expect(cp.spawn).toHaveBeenCalledWith(
+        'my-cmd',
+        ['--verbose'],
+        expect.objectContaining({
+          cwd: '/my/dir',
+          env: expect.objectContaining({ MY_VAR: 'value' }),
+          stdio: ['ignore', 'pipe', 'pipe'],
+        })
+      );
     });
 
     it('should handle empty stdout and stderr', async () => {

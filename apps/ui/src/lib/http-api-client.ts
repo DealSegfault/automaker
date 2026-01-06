@@ -349,6 +349,7 @@ export const verifySession = async (): Promise<boolean> => {
     const response = await fetch(`${getServerUrl()}/api/settings/status`, {
       headers,
       credentials: 'include',
+      signal: AbortSignal.timeout(5000),
     });
 
     // Check for authentication errors
@@ -390,6 +391,7 @@ export const checkSandboxEnvironment = async (): Promise<{
   try {
     const response = await fetch(`${getServerUrl()}/api/health/environment`, {
       method: 'GET',
+      signal: AbortSignal.timeout(5000),
     });
 
     if (!response.ok) {

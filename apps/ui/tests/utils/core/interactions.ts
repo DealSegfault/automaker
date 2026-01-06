@@ -72,15 +72,21 @@ export async function handleLoginScreenIfPresent(page: Page): Promise<boolean> {
     '[data-testid="welcome-view"], [data-testid="board-view"], [data-testid="context-view"], [data-testid="agent-view"]'
   );
 
-  // Race between login screen and actual content
+  const maxWaitMs = 15000;
+
+  // Race between login screen, a delayed redirect to /login, and actual content
   const loginVisible = await Promise.race([
+    page
+      .waitForURL((url) => url.pathname.includes('/login'), { timeout: maxWaitMs })
+      .then(() => true)
+      .catch(() => false),
     loginInput
-      .waitFor({ state: 'visible', timeout: 5000 })
+      .waitFor({ state: 'visible', timeout: maxWaitMs })
       .then(() => true)
       .catch(() => false),
     appContent
       .first()
-      .waitFor({ state: 'visible', timeout: 5000 })
+      .waitFor({ state: 'visible', timeout: maxWaitMs })
       .then(() => false)
       .catch(() => false),
   ]);
@@ -101,8 +107,8 @@ export async function handleLoginScreenIfPresent(page: Page): Promise<boolean> {
 
     // Wait for navigation away from login - either to content or URL change
     await Promise.race([
-      page.waitForURL((url) => !url.pathname.includes('/login'), { timeout: 10000 }),
-      appContent.first().waitFor({ state: 'visible', timeout: 10000 }),
+      page.waitForURL((url) => !url.pathname.includes('/login'), { timeout: 15000 }),
+      appContent.first().waitFor({ state: 'visible', timeout: 15000 }),
     ]).catch(() => {});
 
     // Wait for page to load

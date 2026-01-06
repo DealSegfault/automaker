@@ -23,6 +23,7 @@ import {
 // Pattern definitions for Codex/OpenAI models
 const CODEX_MODEL_PREFIXES = ['gpt-'];
 const OPENAI_O_SERIES_PATTERN = /^o\d/;
+const OPENAI_O_SERIES_ALLOWED_MODELS = new Set<string>();
 
 /**
  * Resolve a model key/alias to a full model string
@@ -78,7 +79,7 @@ export function resolveModelString(
   // (Cursor supports gpt models, but bare "gpt-*" should route to Codex)
   if (
     CODEX_MODEL_PREFIXES.some((prefix) => modelKey.startsWith(prefix)) ||
-    OPENAI_O_SERIES_PATTERN.test(modelKey)
+    (OPENAI_O_SERIES_PATTERN.test(modelKey) && OPENAI_O_SERIES_ALLOWED_MODELS.has(modelKey))
   ) {
     console.log(`[ModelResolver] Using OpenAI/Codex model: ${modelKey}`);
     return modelKey;

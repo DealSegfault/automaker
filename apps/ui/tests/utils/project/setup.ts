@@ -6,7 +6,7 @@ import { Page } from '@playwright/test';
  */
 const STORE_VERSIONS = {
   APP_STORE: 2, // Must match app-store.ts persist version
-  SETUP_STORE: 0, // setup-store.ts doesn't specify a version, so zustand defaults to 0
+  SETUP_STORE: 1, // Must match setup-store.ts persist version
 } as const;
 
 /**
@@ -56,6 +56,7 @@ export async function setupWelcomeView(
           currentView: 'welcome',
           theme: 'dark',
           sidebarOpen: true,
+          skipSandboxWarning: true,
           apiKeys: { anthropic: '', google: '' },
           chatSessions: [],
           chatHistoryOpen: false,
@@ -135,6 +136,7 @@ export async function setupRealProject(
           currentView: currentProject ? 'board' : 'welcome',
           theme: 'dark',
           sidebarOpen: true,
+          skipSandboxWarning: true,
           apiKeys: { anthropic: '', google: '' },
           chatSessions: [],
           chatHistoryOpen: false,
