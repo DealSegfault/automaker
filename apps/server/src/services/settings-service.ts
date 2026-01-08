@@ -153,20 +153,22 @@ export class SettingsService {
     const storedVersion = settings.version || 1;
     let needsSave = false;
 
-    // Migration v1 -> v2: Force enableSandboxMode to false for existing users
-    // Sandbox mode can cause issues on some systems, so we're disabling it by default
-    if (storedVersion < 2) {
-      logger.info('Migrating settings from v1 to v2: disabling sandbox mode');
-      result.enableSandboxMode = false;
-      needsSave = true;
-    }
-
     // Migration v2 -> v3: Convert string phase models to PhaseModelEntry objects
     // Note: migratePhaseModels() handles the actual conversion for both v1 and v2 formats
     if (storedVersion < 3) {
       logger.info(
         `Migrating settings from v${storedVersion} to v3: converting phase models to PhaseModelEntry format`
       );
+      needsSave = true;
+    }
+
+    // Migration v3 -> v4: Add onboarding/setup wizard state fields
+    // Older settings files never stored setup state in settings.json (it lived in localStorage),
+    // so default to "setup complete" for existing installs to avoid forcing re-onboarding.
+    if (storedVersion < 4) {
+      if (settings.setupComplete === undefined) result.setupComplete = true;
+      if (settings.isFirstRun === undefined) result.isFirstRun = false;
+      if (settings.skipClaudeSetup === undefined) result.skipClaudeSetup = false;
       needsSave = true;
     }
 
@@ -264,25 +266,79 @@ export class SettingsService {
     const settingsPath = getGlobalSettingsPath(this.dataDir);
 
     const current = await this.getGlobalSettings();
+
+    // Guard against destructive "empty array/object" overwrites.
+    // During auth transitions, the UI can briefly have default/empty state and accidentally
+    // sync it, wiping persisted settings (especially `projects`).
+    const sanitizedUpdates: Partial<GlobalSettings> = { ...updates };
+    let attemptedProjectWipe = false;
+
+    const ignoreEmptyArrayOverwrite = <K extends keyof GlobalSettings>(key: K): void => {
+      const nextVal = sanitizedUpdates[key] as unknown;
+      const curVal = current[key] as unknown;
+      if (
+        Array.isArray(nextVal) &&
+        nextVal.length === 0 &&
+        Array.isArray(curVal) &&
+        curVal.length > 0
+      ) {
+        delete sanitizedUpdates[key];
+      }
+    };
+
+    const currentProjectsLen = Array.isArray(current.projects) ? current.projects.length : 0;
+    if (
+      Array.isArray(sanitizedUpdates.projects) &&
+      sanitizedUpdates.projects.length === 0 &&
+      currentProjectsLen > 0
+    ) {
+      attemptedProjectWipe = true;
+      delete sanitizedUpdates.projects;
+    }
+
+    ignoreEmptyArrayOverwrite('trashedProjects');
+    ignoreEmptyArrayOverwrite('projectHistory');
+    ignoreEmptyArrayOverwrite('recentFolders');
+    ignoreEmptyArrayOverwrite('aiProfiles');
+    ignoreEmptyArrayOverwrite('mcpServers');
+    ignoreEmptyArrayOverwrite('enabledCursorModels');
+
+    // Empty object overwrite guard
+    if (
+      sanitizedUpdates.lastSelectedSessionByProject &&
+      typeof sanitizedUpdates.lastSelectedSessionByProject === 'object' &&
+      !Array.isArray(sanitizedUpdates.lastSelectedSessionByProject) &&
+      Object.keys(sanitizedUpdates.lastSelectedSessionByProject).length === 0 &&
+      current.lastSelectedSessionByProject &&
+      Object.keys(current.lastSelectedSessionByProject).length > 0
+    ) {
+      delete sanitizedUpdates.lastSelectedSessionByProject;
+    }
+
+    // If a request attempted to wipe projects, also ignore theme changes in that same request.
+    if (attemptedProjectWipe) {
+      delete sanitizedUpdates.theme;
+    }
+
     const updated: GlobalSettings = {
       ...current,
-      ...updates,
+      ...sanitizedUpdates,
       version: SETTINGS_VERSION,
     };
 
     // Deep merge keyboard shortcuts if provided
-    if (updates.keyboardShortcuts) {
+    if (sanitizedUpdates.keyboardShortcuts) {
       updated.keyboardShortcuts = {
         ...current.keyboardShortcuts,
-        ...updates.keyboardShortcuts,
+        ...sanitizedUpdates.keyboardShortcuts,
       };
     }
 
     // Deep merge phaseModels if provided
-    if (updates.phaseModels) {
+    if (sanitizedUpdates.phaseModels) {
       updated.phaseModels = {
         ...current.phaseModels,
-        ...updates.phaseModels,
+        ...sanitizedUpdates.phaseModels,
       };
     }
 
@@ -523,8 +579,26 @@ export class SettingsService {
         }
       }
 
+      // Parse setup wizard state (previously stored in localStorage)
+      let setupState: Record<string, unknown> = {};
+      if (localStorageData['automaker-setup']) {
+        try {
+          const parsed = JSON.parse(localStorageData['automaker-setup']);
+          setupState = parsed.state || parsed;
+        } catch (e) {
+          errors.push(`Failed to parse automaker-setup: ${e}`);
+        }
+      }
+
       // Extract global settings
       const globalSettings: Partial<GlobalSettings> = {
+        setupComplete:
+          setupState.setupComplete !== undefined ? (setupState.setupComplete as boolean) : false,
+        isFirstRun: setupState.isFirstRun !== undefined ? (setupState.isFirstRun as boolean) : true,
+        skipClaudeSetup:
+          setupState.skipClaudeSetup !== undefined
+            ? (setupState.skipClaudeSetup as boolean)
+            : false,
         theme: (appState.theme as GlobalSettings['theme']) || 'dark',
         sidebarOpen: appState.sidebarOpen !== undefined ? (appState.sidebarOpen as boolean) : true,
         chatHistoryOpen: (appState.chatHistoryOpen as boolean) || false,
@@ -537,6 +611,10 @@ export class SettingsService {
           appState.enableDependencyBlocking !== undefined
             ? (appState.enableDependencyBlocking as boolean)
             : true,
+        skipVerificationInAutoMode:
+          appState.skipVerificationInAutoMode !== undefined
+            ? (appState.skipVerificationInAutoMode as boolean)
+            : false,
         useWorktrees: (appState.useWorktrees as boolean) || false,
         showProfilesOnly: (appState.showProfilesOnly as boolean) || false,
         defaultPlanningMode:

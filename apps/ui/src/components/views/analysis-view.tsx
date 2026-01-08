@@ -642,7 +642,9 @@ ${Object.entries(projectAnalysis.filesByExtension)
           category: detectedFeature.category,
           description: detectedFeature.description,
           status: 'backlog',
-        });
+          // Initialize with empty steps so the object satisfies the Feature type
+          steps: [],
+        } as any);
       }
 
       setFeatureListGenerated(true);

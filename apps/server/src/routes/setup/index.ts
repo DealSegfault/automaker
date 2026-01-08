@@ -11,8 +11,12 @@ import { createDeleteApiKeyHandler } from './routes/delete-api-key.js';
 import { createApiKeysHandler } from './routes/api-keys.js';
 import { createPlatformHandler } from './routes/platform.js';
 import { createVerifyClaudeAuthHandler } from './routes/verify-claude-auth.js';
+import { createVerifyCodexAuthHandler } from './routes/verify-codex-auth.js';
 import { createGhStatusHandler } from './routes/gh-status.js';
 import { createCursorStatusHandler } from './routes/cursor-status.js';
+import { createCodexStatusHandler } from './routes/codex-status.js';
+import { createInstallCodexHandler } from './routes/install-codex.js';
+import { createAuthCodexHandler } from './routes/auth-codex.js';
 import {
   createGetCursorConfigHandler,
   createSetCursorDefaultModelHandler,
@@ -35,10 +39,16 @@ export function createSetupRoutes(): Router {
   router.get('/api-keys', createApiKeysHandler());
   router.get('/platform', createPlatformHandler());
   router.post('/verify-claude-auth', createVerifyClaudeAuthHandler());
+  router.post('/verify-codex-auth', createVerifyCodexAuthHandler());
   router.get('/gh-status', createGhStatusHandler());
 
   // Cursor CLI routes
   router.get('/cursor-status', createCursorStatusHandler());
+
+  // Codex CLI routes
+  router.get('/codex-status', createCodexStatusHandler());
+  router.post('/install-codex', createInstallCodexHandler());
+  router.post('/auth-codex', createAuthCodexHandler());
   router.get('/cursor-config', createGetCursorConfigHandler());
   router.post('/cursor-config/default-model', createSetCursorDefaultModelHandler());
   router.post('/cursor-config/models', createSetCursorModelsHandler());

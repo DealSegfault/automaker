@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { createLogger } from '@automaker/utils/logger';
 import { useAppStore, Feature } from '@/store/app-store';

@@ -14,11 +14,11 @@ import {
   Copy,
   RefreshCw,
   AlertTriangle,
-  Terminal,
   XCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { StatusBadge } from '../components';
+import { CursorIcon } from '@/components/ui/provider-icon';
 
 const logger = createLogger('CursorSetupStep');
 
@@ -168,7 +168,7 @@ export function CursorSetupStep({ onNext, onBack, onSkip }: CursorSetupStepProps
     <div className="space-y-6">
       <div className="text-center mb-8">
         <div className="w-16 h-16 rounded-xl bg-cyan-500/10 flex items-center justify-center mx-auto mb-4">
-          <Terminal className="w-8 h-8 text-cyan-500" />
+          <CursorIcon className="w-8 h-8 text-cyan-500" />
         </div>
         <h2 className="text-2xl font-bold text-foreground mb-2">Cursor CLI Setup</h2>
         <p className="text-muted-foreground">Optional - Use Cursor as an AI provider</p>
@@ -195,7 +195,7 @@ export function CursorSetupStep({ onNext, onBack, onSkip }: CursorSetupStepProps
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-lg flex items-center gap-2">
-              <Terminal className="w-5 h-5" />
+              <CursorIcon className="w-5 h-5" />
               Cursor CLI Status
               <Badge variant="outline" className="ml-2">
                 Optional

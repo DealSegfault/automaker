@@ -13,6 +13,8 @@ import {
   isAbortError,
   loadContextFiles,
   createLogger,
+  classifyError,
+  getUserFriendlyErrorMessage,
 } from '@automaker/utils';
 import { ProviderFactory } from '../providers/provider-factory.js';
 import { createChatOptions, validateWorkingDirectory } from '../lib/sdk-options.js';
@@ -20,7 +22,6 @@ import { PathNotAllowedError } from '@automaker/platform';
 import type { SettingsService } from './settings-service.js';
 import {
   getAutoLoadClaudeMdSetting,
-  getEnableSandboxModeSetting,
   filterClaudeMdFromContext,
   getMCPServersFromSettings,
   getPromptCustomization,
@@ -175,6 +176,18 @@ export class AgentService {
       session.thinkingLevel = thinkingLevel;
     }
 
+    // Validate vision support before processing images
+    const effectiveModel = model || session.model;
+    if (imagePaths && imagePaths.length > 0 && effectiveModel) {
+      const supportsVision = ProviderFactory.modelSupportsVision(effectiveModel);
+      if (!supportsVision) {
+        throw new Error(
+          `This model (${effectiveModel}) does not support image input. ` +
+            `Please switch to a model that supports vision, or remove the images and try again.`
+        );
+      }
+    }
+
     // Read images and convert to base64
     const images: Message['images'] = [];
     if (imagePaths && imagePaths.length > 0) {
@@ -235,12 +248,6 @@ export class AgentService {
         '[AgentService]'
       );
 
-      // Load enableSandboxMode setting (global setting only)
-      const enableSandboxMode = await getEnableSandboxModeSetting(
-        this.settingsService,
-        '[AgentService]'
-      );
-
       // Load MCP servers from settings (global setting only)
       const mcpServers = await getMCPServersFromSettings(this.settingsService, '[AgentService]');
 
@@ -286,7 +293,6 @@ export class AgentService {
         systemPrompt: combinedSystemPrompt,
         abortController: session.abortController!,
         autoLoadClaudeMd,
-        enableSandboxMode,
         thinkingLevel: effectiveThinkingLevel, // Pass thinking level for Claude models
         mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
       });
@@ -350,7 +356,6 @@ export class AgentService {
         abortController: session.abortController!,
         conversationHistory: conversationHistory.length > 0 ? conversationHistory : undefined,
         settingSources: settingSources.length > 0 ? settingSources : undefined,
-        sandbox: sdkOptions.sandbox, // Pass sandbox configuration
         sdkSessionId: session.sdkSessionId, // Pass SDK session ID for resuming
         mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined, // Pass MCP servers configuration
         agents: customSubagents, // Pass custom subagents for task delegation
@@ -434,6 +439,53 @@ export class AgentService {
             content: responseText,
             toolUses,
           });
+        } else if (msg.type === 'error') {
+          // Some providers (like Codex CLI/SaaS or Cursor CLI) surface failures as
+          // streamed error messages instead of throwing. Handle these here so the
+          // Agent Runner UX matches the Claude/Cursor behavior without changing
+          // their provider implementations.
+          const rawErrorText =
+            (typeof msg.error === 'string' && msg.error.trim()) ||
+            'Unexpected error from provider during agent execution.';
+
+          const errorInfo = classifyError(new Error(rawErrorText));
+
+          // Keep the provider-supplied text intact (Codex already includes helpful tips),
+          // only add a small rate-limit hint when we can detect it.
+          const enhancedText = errorInfo.isRateLimit
+            ? `${rawErrorText}\n\nTip: It looks like you hit a rate limit. Try waiting a bit or reducing concurrent Agent Runner / Auto Mode tasks.`
+            : rawErrorText;
+
+          this.logger.error('Provider error during agent execution:', {
+            type: errorInfo.type,
+            message: errorInfo.message,
+          });
+
+          // Mark session as no longer running so the UI and queue stay in sync
+          session.isRunning = false;
+          session.abortController = null;
+
+          const errorMessage: Message = {
+            id: this.generateId(),
+            role: 'assistant',
+            content: `Error: ${enhancedText}`,
+            timestamp: new Date().toISOString(),
+            isError: true,
+          };
+
+          session.messages.push(errorMessage);
+          await this.saveSession(sessionId, session.messages);
+
+          this.emitAgentEvent(sessionId, {
+            type: 'error',
+            error: enhancedText,
+            message: errorMessage,
+          });
+
+          // Don't continue streaming after an error message
+          return {
+            success: false,
+          };
         }
       }
 

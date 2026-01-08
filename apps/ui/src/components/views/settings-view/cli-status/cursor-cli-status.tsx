@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
-import { Terminal, CheckCircle2, AlertCircle, RefreshCw, XCircle } from 'lucide-react';
+import { CheckCircle2, AlertCircle, RefreshCw, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { CursorIcon } from '@/components/ui/provider-icon';
 
 interface CursorStatus {
   installed: boolean;
@@ -215,7 +216,7 @@ export function CursorCliStatus({ status, isChecking, onRefresh }: CursorCliStat
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-500/20 to-brand-600/10 flex items-center justify-center border border-brand-500/20">
-              <Terminal className="w-5 h-5 text-brand-500" />
+              <CursorIcon className="w-5 h-5 text-brand-500" />
             </div>
             <h2 className="text-lg font-semibold text-foreground tracking-tight">Cursor CLI</h2>
           </div>

@@ -161,7 +161,6 @@ export function AgentView() {
           isConnected={isConnected}
           isProcessing={isProcessing}
           currentTool={currentTool}
-          agentError={agentError}
           messagesCount={messages.length}
           showSessionManager={showSessionManager}
           onToggleSessionManager={() => setShowSessionManager(!showSessionManager)}

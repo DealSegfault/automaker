@@ -70,17 +70,6 @@ export class ClaudeProvider extends BaseProvider {
     const maxThinkingTokens = getThinkingTokenBudget(thinkingLevel);
 
     // Build Claude SDK options
-    // AUTONOMOUS MODE: Always bypass permissions for fully autonomous operation
-    const hasMcpServers = options.mcpServers && Object.keys(options.mcpServers).length > 0;
-    // Base tools available to all agents
-    // Note: 'Skill' and 'Task' tools are added dynamically by agent-service.ts
-    // based on whether skills/subagents are enabled in settings
-    const defaultTools = ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
-
-    // AUTONOMOUS MODE: Always bypass permissions and allow unrestricted tools
-    // Only restrict tools when no MCP servers are configured
-    const shouldRestrictTools = !hasMcpServers;
-
     const sdkOptions: Options = {
       model,
       systemPrompt,
@@ -88,10 +77,9 @@ export class ClaudeProvider extends BaseProvider {
       cwd,
       // Pass only explicitly allowed environment variables to SDK
       env: buildEnv(),
-      // Only restrict tools if explicitly set OR (no MCP / unrestricted disabled)
-      ...(allowedTools && shouldRestrictTools && { allowedTools }),
-      ...(!allowedTools && shouldRestrictTools && { allowedTools: defaultTools }),
-      // AUTONOMOUS MODE: Always bypass permissions and allow dangerous operations
+      // Pass through allowedTools if provided by caller (decided by sdk-options.ts)
+      ...(allowedTools && { allowedTools }),
+      // AUTONOMOUS MODE: Always bypass permissions for fully autonomous operation
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       abortController,
@@ -101,8 +89,6 @@ export class ClaudeProvider extends BaseProvider {
         : {}),
       // Forward settingSources for CLAUDE.md file loading
       ...(options.settingSources && { settingSources: options.settingSources }),
-      // Forward sandbox configuration
-      ...(options.sandbox && { sandbox: options.sandbox }),
       // Forward MCP servers configuration
       ...(options.mcpServers && { mcpServers: options.mcpServers }),
       // Extended thinking configuration

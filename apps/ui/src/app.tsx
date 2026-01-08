@@ -3,7 +3,7 @@ import { RouterProvider } from '@tanstack/react-router';
 import { createLogger } from '@automaker/utils/logger';
 import { router } from './utils/router';
 import { SplashScreen } from './components/splash-screen';
-import { useSettingsMigration } from './hooks/use-settings-migration';
+import { useSettingsSync } from './hooks/use-settings-sync';
 import { useCursorStatusInit } from './hooks/use-cursor-status-init';
 import './styles/global.css';
 import './styles/theme-imports';
@@ -32,10 +32,14 @@ export default function App() {
     }
   }, []);
 
-  // Run settings migration on startup (localStorage -> file storage)
-  const migrationState = useSettingsMigration();
-  if (migrationState.migrated) {
-    logger.info('Settings migrated to file storage');
+  // Settings are now loaded in __root.tsx after successful session verification
+  // This ensures a unified flow: verify session → load settings → redirect
+  // We no longer block router rendering here - settings loading happens in __root.tsx
+
+  // Sync settings changes back to server (API-first persistence)
+  const settingsSyncState = useSettingsSync();
+  if (settingsSyncState.error) {
+    logger.error('Settings sync error:', settingsSyncState.error);
   }
 
   // Initialize Cursor CLI status at startup

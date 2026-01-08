@@ -52,10 +52,12 @@ export function TaskProgressPanel({
       }
 
       const result = await api.features.get(projectPath, featureId);
-      if (result.success && result.feature?.planSpec?.tasks) {
-        const planTasks = result.feature.planSpec.tasks;
-        const currentId = result.feature.planSpec.currentTaskId;
-        const completedCount = result.feature.planSpec.tasksCompleted || 0;
+      const feature: any = (result as any).feature;
+      if (result.success && feature?.planSpec?.tasks) {
+        const planSpec = feature.planSpec as any;
+        const planTasks = planSpec.tasks;
+        const currentId = planSpec.currentTaskId;
+        const completedCount = planSpec.tasksCompleted || 0;
 
         // Convert planSpec tasks to TaskInfo with proper status
         const initialTasks: TaskInfo[] = planTasks.map((t: any, index: number) => ({

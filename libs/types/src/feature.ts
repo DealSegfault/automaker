@@ -4,6 +4,16 @@
 
 import type { PlanningMode, ThinkingLevel } from './settings.js';
 
+/**
+ * A single entry in the description history
+ */
+export interface DescriptionHistoryEntry {
+  description: string;
+  timestamp: string; // ISO date string
+  source: 'initial' | 'enhance' | 'edit'; // What triggered this version
+  enhancementMode?: 'improve' | 'technical' | 'simplify' | 'acceptance'; // Only for 'enhance' source
+}
+
 export interface FeatureImagePath {
   id: string;
   path: string;
@@ -54,6 +64,7 @@ export interface Feature {
   error?: string;
   summary?: string;
   startedAt?: string;
+  descriptionHistory?: DescriptionHistoryEntry[]; // History of description changes
   [key: string]: unknown; // Keep catch-all for extensibility
 }
 

@@ -12,6 +12,7 @@ import {
   ScrollText,
   ShieldCheck,
   User,
+  FastForward,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -29,6 +30,7 @@ interface FeatureDefaultsSectionProps {
   showProfilesOnly: boolean;
   defaultSkipTests: boolean;
   enableDependencyBlocking: boolean;
+  skipVerificationInAutoMode: boolean;
   useWorktrees: boolean;
   defaultPlanningMode: PlanningMode;
   defaultRequirePlanApproval: boolean;
@@ -37,6 +39,7 @@ interface FeatureDefaultsSectionProps {
   onShowProfilesOnlyChange: (value: boolean) => void;
   onDefaultSkipTestsChange: (value: boolean) => void;
   onEnableDependencyBlockingChange: (value: boolean) => void;
+  onSkipVerificationInAutoModeChange: (value: boolean) => void;
   onUseWorktreesChange: (value: boolean) => void;
   onDefaultPlanningModeChange: (value: PlanningMode) => void;
   onDefaultRequirePlanApprovalChange: (value: boolean) => void;
@@ -47,6 +50,7 @@ export function FeatureDefaultsSection({
   showProfilesOnly,
   defaultSkipTests,
   enableDependencyBlocking,
+  skipVerificationInAutoMode,
   useWorktrees,
   defaultPlanningMode,
   defaultRequirePlanApproval,
@@ -55,6 +59,7 @@ export function FeatureDefaultsSection({
   onShowProfilesOnlyChange,
   onDefaultSkipTestsChange,
   onEnableDependencyBlockingChange,
+  onSkipVerificationInAutoModeChange,
   onUseWorktreesChange,
   onDefaultPlanningModeChange,
   onDefaultRequirePlanApprovalChange,
@@ -302,6 +307,34 @@ export function FeatureDefaultsSection({
               When enabled, features with incomplete dependencies will show blocked badges and
               warnings. Auto mode and backlog ordering always respect dependencies regardless of
               this setting.
+            </p>
+          </div>
+        </div>
+
+        {/* Separator */}
+        <div className="border-t border-border/30" />
+
+        {/* Skip Verification in Auto Mode Setting */}
+        <div className="group flex items-start space-x-3 p-3 rounded-xl hover:bg-accent/30 transition-colors duration-200 -mx-3">
+          <Checkbox
+            id="skip-verification-auto-mode"
+            checked={skipVerificationInAutoMode}
+            onCheckedChange={(checked) => onSkipVerificationInAutoModeChange(checked === true)}
+            className="mt-1"
+            data-testid="skip-verification-auto-mode-checkbox"
+          />
+          <div className="space-y-1.5">
+            <Label
+              htmlFor="skip-verification-auto-mode"
+              className="text-foreground cursor-pointer font-medium flex items-center gap-2"
+            >
+              <FastForward className="w-4 h-4 text-brand-500" />
+              Skip verification in auto mode
+            </Label>
+            <p className="text-xs text-muted-foreground/80 leading-relaxed">
+              When enabled, auto mode will grab features even if their dependencies are not
+              verified, as long as they are not currently running. This allows faster pipeline
+              execution without waiting for manual verification.
             </p>
           </div>
         </div>

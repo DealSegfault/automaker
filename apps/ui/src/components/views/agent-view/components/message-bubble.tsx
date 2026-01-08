@@ -1,4 +1,4 @@
-import { Bot, User, ImageIcon } from 'lucide-react';
+import { Bot, User, ImageIcon, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Markdown } from '@/components/ui/markdown';
 import type { ImageAttachment } from '@/store/app-store';
@@ -9,6 +9,7 @@ interface Message {
   content: string;
   timestamp: string;
   images?: ImageAttachment[];
+  isError?: boolean;
 }
 
 interface MessageBubbleProps {
@@ -16,6 +17,8 @@ interface MessageBubbleProps {
 }
 
 export function MessageBubble({ message }: MessageBubbleProps) {
+  const isError = message.isError && message.role === 'assistant';
+
   return (
     <div
       className={cn(
@@ -27,12 +30,16 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       <div
         className={cn(
           'w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm',
-          message.role === 'assistant'
-            ? 'bg-primary/10 ring-1 ring-primary/20'
-            : 'bg-muted ring-1 ring-border'
+          isError
+            ? 'bg-red-500/10 ring-1 ring-red-500/20'
+            : message.role === 'assistant'
+              ? 'bg-primary/10 ring-1 ring-primary/20'
+              : 'bg-muted ring-1 ring-border'
         )}
       >
-        {message.role === 'assistant' ? (
+        {isError ? (
+          <AlertCircle className="w-4 h-4 text-red-500" />
+        ) : message.role === 'assistant' ? (
           <Bot className="w-4 h-4 text-primary" />
         ) : (
           <User className="w-4 h-4 text-muted-foreground" />
@@ -43,13 +50,22 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       <div
         className={cn(
           'flex-1 max-w-[85%] rounded-2xl px-4 py-3 shadow-sm',
-          message.role === 'user'
-            ? 'bg-primary text-primary-foreground'
-            : 'bg-card border border-border'
+          isError
+            ? 'bg-red-500/10 border border-red-500/30'
+            : message.role === 'user'
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-card border border-border'
         )}
       >
         {message.role === 'assistant' ? (
-          <Markdown className="text-sm text-foreground prose-p:leading-relaxed prose-headings:text-foreground prose-strong:text-foreground prose-code:text-primary prose-code:bg-muted prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded">
+          <Markdown
+            className={cn(
+              'text-sm prose-p:leading-relaxed prose-headings:text-foreground prose-strong:text-foreground prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded',
+              isError
+                ? 'text-red-600 dark:text-red-400 prose-code:text-red-600 dark:prose-code:text-red-400 prose-code:bg-red-500/10'
+                : 'text-foreground prose-code:text-primary prose-code:bg-muted'
+            )}
+          >
             {message.content}
           </Markdown>
         ) : (
@@ -95,7 +111,11 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         <p
           className={cn(
             'text-[11px] mt-2 font-medium',
-            message.role === 'user' ? 'text-primary-foreground/70' : 'text-muted-foreground'
+            isError
+              ? 'text-red-500/70'
+              : message.role === 'user'
+                ? 'text-primary-foreground/70'
+                : 'text-muted-foreground'
           )}
         >
           {new Date(message.timestamp).toLocaleTimeString([], {

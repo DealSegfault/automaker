@@ -254,7 +254,8 @@ export function useNavigation({
           if (item.shortcut) {
             shortcutsList.push({
               key: item.shortcut,
-              action: () => navigate({ to: `/${item.id}` as const }),
+              // Cast to router path type; ids are constrained to known routes
+              action: () => navigate({ to: `/${item.id}` as unknown as '/' }),
               description: `Navigate to ${item.label}`,
             });
           }

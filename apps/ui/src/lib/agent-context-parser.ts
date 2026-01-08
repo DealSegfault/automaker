@@ -33,9 +33,31 @@ export const DEFAULT_MODEL = 'claude-opus-4-5-20251101';
  * Formats a model name for display
  */
 export function formatModelName(model: string): string {
+  // Claude models
   if (model.includes('opus')) return 'Opus 4.5';
   if (model.includes('sonnet')) return 'Sonnet 4.5';
   if (model.includes('haiku')) return 'Haiku 4.5';
+
+  // Codex/GPT models
+  if (model === 'gpt-5.2') return 'GPT-5.2';
+  if (model === 'gpt-5.1-codex-max') return 'GPT-5.1 Max';
+  if (model === 'gpt-5.1-codex') return 'GPT-5.1 Codex';
+  if (model === 'gpt-5.1-codex-mini') return 'GPT-5.1 Mini';
+  if (model === 'gpt-5.1') return 'GPT-5.1';
+  if (model.startsWith('gpt-')) return model.toUpperCase();
+  if (model.match(/^o\d/)) return model.toUpperCase(); // o1, o3, etc.
+
+  // Cursor models
+  if (model === 'cursor-auto' || model === 'auto') return 'Cursor Auto';
+  if (model === 'cursor-composer-1' || model === 'composer-1') return 'Composer 1';
+  if (model.startsWith('cursor-sonnet')) return 'Cursor Sonnet';
+  if (model.startsWith('cursor-opus')) return 'Cursor Opus';
+  if (model.startsWith('cursor-gpt')) return model.replace('cursor-', '').replace('gpt-', 'GPT-');
+  if (model.startsWith('cursor-gemini'))
+    return model.replace('cursor-', 'Cursor ').replace('gemini', 'Gemini');
+  if (model.startsWith('cursor-grok')) return 'Cursor Grok';
+
+  // Default: split by dash and capitalize
   return model.split('-').slice(1, 3).join(' ');
 }
 

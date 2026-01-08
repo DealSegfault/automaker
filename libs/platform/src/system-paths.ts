@@ -72,6 +72,131 @@ export function getClaudeCliPaths(): string[] {
 }
 
 /**
+ * Get NVM-installed Node.js bin paths for CLI tools
+ */
+function getNvmBinPaths(): string[] {
+  const nvmDir = process.env.NVM_DIR || path.join(os.homedir(), '.nvm');
+  const versionsDir = path.join(nvmDir, 'versions', 'node');
+
+  try {
+    if (!fsSync.existsSync(versionsDir)) {
+      return [];
+    }
+    const versions = fsSync.readdirSync(versionsDir);
+    return versions.map((version) => path.join(versionsDir, version, 'bin'));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Get fnm (Fast Node Manager) installed Node.js bin paths
+ */
+function getFnmBinPaths(): string[] {
+  const homeDir = os.homedir();
+  const possibleFnmDirs = [
+    path.join(homeDir, '.local', 'share', 'fnm', 'node-versions'),
+    path.join(homeDir, '.fnm', 'node-versions'),
+    // macOS
+    path.join(homeDir, 'Library', 'Application Support', 'fnm', 'node-versions'),
+  ];
+
+  const binPaths: string[] = [];
+
+  for (const fnmDir of possibleFnmDirs) {
+    try {
+      if (!fsSync.existsSync(fnmDir)) {
+        continue;
+      }
+      const versions = fsSync.readdirSync(fnmDir);
+      for (const version of versions) {
+        binPaths.push(path.join(fnmDir, version, 'installation', 'bin'));
+      }
+    } catch {
+      // Ignore errors for this directory
+    }
+  }
+
+  return binPaths;
+}
+
+/**
+ * Get common paths where Codex CLI might be installed
+ */
+export function getCodexCliPaths(): string[] {
+  const isWindows = process.platform === 'win32';
+  const homeDir = os.homedir();
+
+  if (isWindows) {
+    const appData = process.env.APPDATA || path.join(homeDir, 'AppData', 'Roaming');
+    const localAppData = process.env.LOCALAPPDATA || path.join(homeDir, 'AppData', 'Local');
+    return [
+      path.join(homeDir, '.local', 'bin', 'codex.exe'),
+      path.join(appData, 'npm', 'codex.cmd'),
+      path.join(appData, 'npm', 'codex'),
+      path.join(appData, '.npm-global', 'bin', 'codex.cmd'),
+      path.join(appData, '.npm-global', 'bin', 'codex'),
+      // Volta on Windows
+      path.join(homeDir, '.volta', 'bin', 'codex.exe'),
+      // pnpm on Windows
+      path.join(localAppData, 'pnpm', 'codex.cmd'),
+      path.join(localAppData, 'pnpm', 'codex'),
+    ];
+  }
+
+  // Include NVM bin paths for codex installed via npm global under NVM
+  const nvmBinPaths = getNvmBinPaths().map((binPath) => path.join(binPath, 'codex'));
+
+  // Include fnm bin paths
+  const fnmBinPaths = getFnmBinPaths().map((binPath) => path.join(binPath, 'codex'));
+
+  // pnpm global bin path
+  const pnpmHome = process.env.PNPM_HOME || path.join(homeDir, '.local', 'share', 'pnpm');
+
+  return [
+    // Standard locations
+    path.join(homeDir, '.local', 'bin', 'codex'),
+    '/opt/homebrew/bin/codex',
+    '/usr/local/bin/codex',
+    '/usr/bin/codex',
+    path.join(homeDir, '.npm-global', 'bin', 'codex'),
+    // Linuxbrew
+    '/home/linuxbrew/.linuxbrew/bin/codex',
+    // Volta
+    path.join(homeDir, '.volta', 'bin', 'codex'),
+    // pnpm global
+    path.join(pnpmHome, 'codex'),
+    // Yarn global
+    path.join(homeDir, '.yarn', 'bin', 'codex'),
+    path.join(homeDir, '.config', 'yarn', 'global', 'node_modules', '.bin', 'codex'),
+    // Snap packages
+    '/snap/bin/codex',
+    // NVM paths
+    ...nvmBinPaths,
+    // fnm paths
+    ...fnmBinPaths,
+  ];
+}
+
+const CODEX_CONFIG_DIR_NAME = '.codex';
+const CODEX_AUTH_FILENAME = 'auth.json';
+const CODEX_TOKENS_KEY = 'tokens';
+
+/**
+ * Get the Codex configuration directory path
+ */
+export function getCodexConfigDir(): string {
+  return path.join(os.homedir(), CODEX_CONFIG_DIR_NAME);
+}
+
+/**
+ * Get path to Codex auth file
+ */
+export function getCodexAuthPath(): string {
+  return path.join(getCodexConfigDir(), CODEX_AUTH_FILENAME);
+}
+
+/**
  * Get the Claude configuration directory path
  */
 export function getClaudeConfigDir(): string {
@@ -413,6 +538,11 @@ function getAllAllowedSystemPaths(): string[] {
     getClaudeSettingsPath(),
     getClaudeStatsCachePath(),
     getClaudeProjectsDir(),
+    // Codex CLI paths
+    ...getCodexCliPaths(),
+    // Codex config directory and files
+    getCodexConfigDir(),
+    getCodexAuthPath(),
     // Shell paths
     ...getShellPaths(),
     // Node.js system paths
@@ -432,6 +562,8 @@ function getAllAllowedSystemDirs(): string[] {
     // Claude config
     getClaudeConfigDir(),
     getClaudeProjectsDir(),
+    // Codex config
+    getCodexConfigDir(),
     // Version managers (need recursive access for version directories)
     ...getNvmPaths(),
     ...getFnmPaths(),
@@ -740,6 +872,10 @@ export async function findClaudeCliPath(): Promise<string | null> {
   return findFirstExistingPath(getClaudeCliPaths());
 }
 
+export async function findCodexCliPath(): Promise<string | null> {
+  return findFirstExistingPath(getCodexCliPaths());
+}
+
 /**
  * Get Claude authentication status by checking various indicators
  */
@@ -800,14 +936,73 @@ export async function getClaudeAuthIndicators(): Promise<ClaudeAuthIndicators> {
       const content = await systemPathReadFile(credPath);
       const credentials = JSON.parse(content);
       result.hasCredentialsFile = true;
+      // Support multiple credential formats:
+      // 1. Claude Code CLI format: { claudeAiOauth: { accessToken, refreshToken } }
+      // 2. Legacy format: { oauth_token } or { access_token }
+      // 3. API key format: { api_key }
+      const hasClaudeOauth = !!credentials.claudeAiOauth?.accessToken;
+      const hasLegacyOauth = !!(credentials.oauth_token || credentials.access_token);
       result.credentials = {
-        hasOAuthToken: !!(credentials.oauth_token || credentials.access_token),
+        hasOAuthToken: hasClaudeOauth || hasLegacyOauth,
         hasApiKey: !!credentials.api_key,
       };
       break;
     } catch {
       // Continue to next path
     }
+  }
+
+  return result;
+}
+
+export interface CodexAuthIndicators {
+  hasAuthFile: boolean;
+  hasOAuthToken: boolean;
+  hasApiKey: boolean;
+}
+
+const CODEX_OAUTH_KEYS = ['access_token', 'oauth_token'] as const;
+const CODEX_API_KEY_KEYS = ['api_key', 'OPENAI_API_KEY'] as const;
+
+function hasNonEmptyStringField(record: Record<string, unknown>, keys: readonly string[]): boolean {
+  return keys.some((key) => typeof record[key] === 'string' && record[key]);
+}
+
+function getNestedTokens(record: Record<string, unknown>): Record<string, unknown> | null {
+  const tokens = record[CODEX_TOKENS_KEY];
+  if (tokens && typeof tokens === 'object' && !Array.isArray(tokens)) {
+    return tokens as Record<string, unknown>;
+  }
+  return null;
+}
+
+export async function getCodexAuthIndicators(): Promise<CodexAuthIndicators> {
+  const result: CodexAuthIndicators = {
+    hasAuthFile: false,
+    hasOAuthToken: false,
+    hasApiKey: false,
+  };
+
+  try {
+    const authContent = await systemPathReadFile(getCodexAuthPath());
+    result.hasAuthFile = true;
+
+    try {
+      const authJson = JSON.parse(authContent) as Record<string, unknown>;
+      result.hasOAuthToken = hasNonEmptyStringField(authJson, CODEX_OAUTH_KEYS);
+      result.hasApiKey = hasNonEmptyStringField(authJson, CODEX_API_KEY_KEYS);
+      const nestedTokens = getNestedTokens(authJson);
+      if (nestedTokens) {
+        result.hasOAuthToken =
+          result.hasOAuthToken || hasNonEmptyStringField(nestedTokens, CODEX_OAUTH_KEYS);
+        result.hasApiKey =
+          result.hasApiKey || hasNonEmptyStringField(nestedTokens, CODEX_API_KEY_KEYS);
+      }
+    } catch {
+      // Ignore parse errors; file exists but contents are unreadable
+    }
+  } catch {
+    // Auth file not found or inaccessible
   }
 
   return result;

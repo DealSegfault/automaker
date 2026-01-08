@@ -4,6 +4,9 @@ export type SettingsViewId =
   | 'api-keys'
   | 'claude'
   | 'providers'
+  | 'claude-provider'
+  | 'cursor-provider'
+  | 'codex-provider'
   | 'mcp-servers'
   | 'prompts'
   | 'model-defaults'
@@ -12,6 +15,8 @@ export type SettingsViewId =
   | 'keyboard'
   | 'audio'
   | 'defaults'
+  | 'account'
+  | 'security'
   | 'danger';
 
 interface UseSettingsViewOptions {

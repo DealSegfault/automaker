@@ -394,14 +394,13 @@ export function createDescribeImageHandler(
           maxTurns: 1,
           allowedTools: [],
           autoLoadClaudeMd,
-          sandbox: { enabled: true, autoAllowBashIfSandboxed: true },
           thinkingLevel, // Pass thinking level for extended thinking
         });
 
         logger.info(
           `[${requestId}] SDK options model=${sdkOptions.model} maxTurns=${sdkOptions.maxTurns} allowedTools=${JSON.stringify(
             sdkOptions.allowedTools
-          )} sandbox=${JSON.stringify(sdkOptions.sandbox)}`
+          )}`
         );
 
         const promptGenerator = (async function* () {

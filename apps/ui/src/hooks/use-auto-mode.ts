@@ -7,6 +7,36 @@ import type { AutoModeEvent } from '@/types/electron';
 
 const logger = createLogger('AutoMode');
 
+const AUTO_MODE_SESSION_KEY = 'automaker:autoModeRunningByProjectPath';
+
+function readAutoModeSession(): Record<string, boolean> {
+  try {
+    if (typeof window === 'undefined') return {};
+    const raw = window.sessionStorage?.getItem(AUTO_MODE_SESSION_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
+function writeAutoModeSession(next: Record<string, boolean>): void {
+  try {
+    if (typeof window === 'undefined') return;
+    window.sessionStorage?.setItem(AUTO_MODE_SESSION_KEY, JSON.stringify(next));
+  } catch {
+    // ignore storage errors (private mode, disabled storage, etc.)
+  }
+}
+
+function setAutoModeSessionForProjectPath(projectPath: string, running: boolean): void {
+  const current = readAutoModeSession();
+  const next = { ...current, [projectPath]: running };
+  writeAutoModeSession(next);
+}
+
 // Type guard for plan_approval_required event
 function isPlanApprovalEvent(
   event: AutoModeEvent
@@ -63,6 +93,23 @@ export function useAutoMode() {
 
   // Check if we can start a new task based on concurrency limit
   const canStartNewTask = runningAutoTasks.length < maxConcurrency;
+
+  // Restore auto-mode toggle after a renderer refresh (e.g. dev HMR reload).
+  // This is intentionally session-scoped to avoid auto-running features after a full app restart.
+  useEffect(() => {
+    if (!currentProject) return;
+
+    const session = readAutoModeSession();
+    const desired = session[currentProject.path];
+    if (typeof desired !== 'boolean') return;
+
+    if (desired !== isAutoModeRunning) {
+      logger.info(
+        `[AutoMode] Restoring session state for ${currentProject.path}: ${desired ? 'ON' : 'OFF'}`
+      );
+      setAutoModeRunning(currentProject.id, desired);
+    }
+  }, [currentProject, isAutoModeRunning, setAutoModeRunning]);
 
   // Handle auto mode events - listen globally for all projects
   useEffect(() => {
@@ -337,6 +384,7 @@ export function useAutoMode() {
       return;
     }
 
+    setAutoModeSessionForProjectPath(currentProject.path, true);
     setAutoModeRunning(currentProject.id, true);
     logger.debug(`[AutoMode] Started with maxConcurrency: ${maxConcurrency}`);
   }, [currentProject, setAutoModeRunning, maxConcurrency]);
@@ -348,6 +396,7 @@ export function useAutoMode() {
       return;
     }
 
+    setAutoModeSessionForProjectPath(currentProject.path, false);
     setAutoModeRunning(currentProject.id, false);
     // NOTE: We intentionally do NOT clear running tasks here.
     // Stopping auto mode only turns off the toggle to prevent new features

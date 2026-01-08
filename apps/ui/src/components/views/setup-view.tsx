@@ -7,6 +7,7 @@ import {
   CompleteStep,
   ClaudeSetupStep,
   CursorSetupStep,
+  CodexSetupStep,
   GitHubSetupStep,
 } from './setup-view/steps';
 import { useNavigate } from '@tanstack/react-router';
@@ -18,13 +19,14 @@ export function SetupView() {
   const { currentStep, setCurrentStep, completeSetup, setSkipClaudeSetup } = useSetupStore();
   const navigate = useNavigate();
 
-  const steps = ['welcome', 'theme', 'claude', 'cursor', 'github', 'complete'] as const;
+  const steps = ['welcome', 'theme', 'claude', 'cursor', 'codex', 'github', 'complete'] as const;
   type StepName = (typeof steps)[number];
   const getStepName = (): StepName => {
     if (currentStep === 'claude_detect' || currentStep === 'claude_auth') return 'claude';
     if (currentStep === 'welcome') return 'welcome';
     if (currentStep === 'theme') return 'theme';
     if (currentStep === 'cursor') return 'cursor';
+    if (currentStep === 'codex') return 'codex';
     if (currentStep === 'github') return 'github';
     return 'complete';
   };
@@ -46,6 +48,10 @@ export function SetupView() {
         setCurrentStep('cursor');
         break;
       case 'cursor':
+        logger.debug('[Setup Flow] Moving to codex step');
+        setCurrentStep('codex');
+        break;
+      case 'codex':
         logger.debug('[Setup Flow] Moving to github step');
         setCurrentStep('github');
         break;
@@ -68,8 +74,11 @@ export function SetupView() {
       case 'cursor':
         setCurrentStep('claude_detect');
         break;
-      case 'github':
+      case 'codex':
         setCurrentStep('cursor');
+        break;
+      case 'github':
+        setCurrentStep('codex');
         break;
     }
   };
@@ -82,6 +91,11 @@ export function SetupView() {
 
   const handleSkipCursor = () => {
     logger.debug('[Setup Flow] Skipping Cursor setup');
+    setCurrentStep('codex');
+  };
+
+  const handleSkipCodex = () => {
+    logger.debug('[Setup Flow] Skipping Codex setup');
     setCurrentStep('github');
   };
 
@@ -136,6 +150,14 @@ export function SetupView() {
                 onNext={() => handleNext('cursor')}
                 onBack={() => handleBack('cursor')}
                 onSkip={handleSkipCursor}
+              />
+            )}
+
+            {currentStep === 'codex' && (
+              <CodexSetupStep
+                onNext={() => handleNext('codex')}
+                onBack={() => handleBack('codex')}
+                onSkip={handleSkipCodex}
               />
             )}
 

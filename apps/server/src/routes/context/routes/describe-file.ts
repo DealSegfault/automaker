@@ -232,7 +232,6 @@ File: ${fileName}${truncated ? ' (truncated)' : ''}`;
           maxTurns: 1,
           allowedTools: [],
           autoLoadClaudeMd,
-          sandbox: { enabled: true, autoAllowBashIfSandboxed: true },
           thinkingLevel, // Pass thinking level for extended thinking
         });
 

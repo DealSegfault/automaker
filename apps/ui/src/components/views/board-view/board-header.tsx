@@ -1,13 +1,15 @@
+import { useState } from 'react';
 import { HotkeyButton } from '@/components/ui/hotkey-button';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Plus, Bot, Wand2 } from 'lucide-react';
+import { Plus, Bot, Wand2, Settings2 } from 'lucide-react';
 import { KeyboardShortcut } from '@/hooks/use-keyboard-shortcuts';
-import { ClaudeUsagePopover } from '@/components/claude-usage-popover';
+import { UsagePopover } from '@/components/usage-popover';
 import { useAppStore } from '@/store/app-store';
 import { useSetupStore } from '@/store/setup-store';
+import { AutoModeSettingsDialog } from './dialogs/auto-mode-settings-dialog';
 
 interface BoardHeaderProps {
   projectName: string;
@@ -38,19 +40,26 @@ export function BoardHeader({
   addFeatureShortcut,
   isMounted,
 }: BoardHeaderProps) {
+  const [showAutoModeSettings, setShowAutoModeSettings] = useState(false);
   const apiKeys = useAppStore((state) => state.apiKeys);
   const claudeAuthStatus = useSetupStore((state) => state.claudeAuthStatus);
+  const skipVerificationInAutoMode = useAppStore((state) => state.skipVerificationInAutoMode);
+  const setSkipVerificationInAutoMode = useAppStore((state) => state.setSkipVerificationInAutoMode);
+  const codexAuthStatus = useSetupStore((state) => state.codexAuthStatus);
 
-  // Hide usage tracking when using API key (only show for Claude Code CLI users)
-  // Check both user-entered API key and environment variable ANTHROPIC_API_KEY
+  // Claude usage tracking visibility logic
+  // Hide when using API key (only show for Claude Code CLI users)
   // Also hide on Windows for now (CLI usage command not supported)
-  // Only show if CLI has been verified/authenticated
   const isWindows =
     typeof navigator !== 'undefined' && navigator.platform?.toLowerCase().includes('win');
-  const hasApiKey = !!apiKeys.anthropic || !!claudeAuthStatus?.hasEnvApiKey;
-  const isCliVerified =
+  const hasClaudeApiKey = !!apiKeys.anthropic || !!claudeAuthStatus?.hasEnvApiKey;
+  const isClaudeCliVerified =
     claudeAuthStatus?.authenticated && claudeAuthStatus?.method === 'cli_authenticated';
-  const showUsageTracking = !hasApiKey && !isWindows && isCliVerified;
+  const showClaudeUsage = !hasClaudeApiKey && !isWindows && isClaudeCliVerified;
+
+  // Codex usage tracking visibility logic
+  // Show if Codex is authenticated (CLI or API key)
+  const showCodexUsage = !!codexAuthStatus?.authenticated;
 
   return (
     <div className="flex items-center justify-between p-4 border-b border-border bg-glass backdrop-blur-md">
@@ -59,8 +68,8 @@ export function BoardHeader({
         <p className="text-sm text-muted-foreground">{projectName}</p>
       </div>
       <div className="flex gap-2 items-center">
-        {/* Usage Popover - only show for CLI users (not API key users) */}
-        {isMounted && showUsageTracking && <ClaudeUsagePopover />}
+        {/* Usage Popover - show if either provider is authenticated */}
+        {isMounted && (showClaudeUsage || showCodexUsage) && <UsagePopover />}
 
         {/* Concurrency Slider - only show after mount to prevent hydration issues */}
         {isMounted && (
@@ -97,8 +106,24 @@ export function BoardHeader({
               onCheckedChange={onAutoModeToggle}
               data-testid="auto-mode-toggle"
             />
+            <button
+              onClick={() => setShowAutoModeSettings(true)}
+              className="p-1 rounded hover:bg-accent/50 transition-colors"
+              title="Auto Mode Settings"
+              data-testid="auto-mode-settings-button"
+            >
+              <Settings2 className="w-4 h-4 text-muted-foreground" />
+            </button>
           </div>
         )}
+
+        {/* Auto Mode Settings Dialog */}
+        <AutoModeSettingsDialog
+          open={showAutoModeSettings}
+          onOpenChange={setShowAutoModeSettings}
+          skipVerificationInAutoMode={skipVerificationInAutoMode}
+          onSkipVerificationChange={setSkipVerificationInAutoMode}
+        />
 
         <Button
           size="sm"

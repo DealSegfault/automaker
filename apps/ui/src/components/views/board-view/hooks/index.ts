@@ -7,3 +7,4 @@ export { useBoardEffects } from './use-board-effects';
 export { useBoardBackground } from './use-board-background';
 export { useBoardPersistence } from './use-board-persistence';
 export { useFollowUpState } from './use-follow-up-state';
+export { useSelectionMode } from './use-selection-mode';

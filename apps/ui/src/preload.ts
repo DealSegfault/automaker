@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Get API key for authentication
   getApiKey: (): Promise<string | null> => ipcRenderer.invoke('auth:getApiKey'),
 
+  // Check if running in external server mode (Docker API)
+  isExternalServerMode: (): Promise<boolean> => ipcRenderer.invoke('auth:isExternalServerMode'),
+
   // Native dialogs - better UX than prompt()
   openDirectory: (): Promise<Electron.OpenDialogReturnValue> =>
     ipcRenderer.invoke('dialog:openDirectory'),

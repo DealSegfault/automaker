@@ -7,6 +7,7 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  isError?: boolean;
   images?: ImageAttachment[];
 }
 

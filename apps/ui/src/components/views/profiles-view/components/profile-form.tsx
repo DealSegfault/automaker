@@ -7,7 +7,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { cn, modelSupportsThinking } from '@/lib/utils';
 import { DialogFooter } from '@/components/ui/dialog';
-import { Brain, Bot, Terminal } from 'lucide-react';
+import { Brain } from 'lucide-react';
+import { AnthropicIcon, CursorIcon, OpenAIIcon } from '@/components/ui/provider-icon';
 import { toast } from 'sonner';
 import type {
   AIProfile,
@@ -15,8 +16,9 @@ import type {
   ThinkingLevel,
   ModelProvider,
   CursorModelId,
+  CodexModelId,
 } from '@automaker/types';
-import { CURSOR_MODEL_MAP, cursorModelHasThinking } from '@automaker/types';
+import { CURSOR_MODEL_MAP, cursorModelHasThinking, CODEX_MODEL_MAP } from '@automaker/types';
 import { useAppStore } from '@/store/app-store';
 import { CLAUDE_MODELS, THINKING_LEVELS, ICON_OPTIONS } from '../constants';
 
@@ -46,6 +48,8 @@ export function ProfileForm({
     thinkingLevel: profile.thinkingLevel || ('none' as ThinkingLevel),
     // Cursor-specific
     cursorModel: profile.cursorModel || ('auto' as CursorModelId),
+    // Codex-specific - use a valid CodexModelId from CODEX_MODEL_MAP
+    codexModel: profile.codexModel || (CODEX_MODEL_MAP.gpt52Codex as CodexModelId),
     icon: profile.icon || 'Brain',
   });
 
@@ -59,6 +63,8 @@ export function ProfileForm({
       model: provider === 'claude' ? 'sonnet' : formData.model,
       thinkingLevel: provider === 'claude' ? 'none' : formData.thinkingLevel,
       cursorModel: provider === 'cursor' ? 'auto' : formData.cursorModel,
+      codexModel:
+        provider === 'codex' ? (CODEX_MODEL_MAP.gpt52Codex as CodexModelId) : formData.codexModel,
     });
   };
 
@@ -73,6 +79,13 @@ export function ProfileForm({
     setFormData({
       ...formData,
       cursorModel,
+    });
+  };
+
+  const handleCodexModelChange = (codexModel: CodexModelId) => {
+    setFormData({
+      ...formData,
+      codexModel,
     });
   };
 
@@ -94,6 +107,11 @@ export function ProfileForm({
       onSave({
         ...baseProfile,
         cursorModel: formData.cursorModel,
+      });
+    } else if (formData.provider === 'codex') {
+      onSave({
+        ...baseProfile,
+        codexModel: formData.codexModel,
       });
     } else {
       onSave({
@@ -158,34 +176,48 @@ export function ProfileForm({
         {/* Provider Selection */}
         <div className="space-y-2">
           <Label>AI Provider</Label>
-          <div className="flex gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <button
               type="button"
               onClick={() => handleProviderChange('claude')}
               className={cn(
-                'flex-1 px-3 py-2 rounded-md border text-sm font-medium transition-colors flex items-center justify-center gap-2',
+                'px-3 py-2 rounded-md border text-sm font-medium transition-colors flex items-center justify-center gap-2',
                 formData.provider === 'claude'
                   ? 'bg-primary text-primary-foreground border-primary'
                   : 'bg-background hover:bg-accent border-border'
               )}
               data-testid="provider-select-claude"
             >
-              <Bot className="w-4 h-4" />
+              <AnthropicIcon className="w-4 h-4" />
               Claude
             </button>
             <button
               type="button"
               onClick={() => handleProviderChange('cursor')}
               className={cn(
-                'flex-1 px-3 py-2 rounded-md border text-sm font-medium transition-colors flex items-center justify-center gap-2',
+                'px-3 py-2 rounded-md border text-sm font-medium transition-colors flex items-center justify-center gap-2',
                 formData.provider === 'cursor'
                   ? 'bg-primary text-primary-foreground border-primary'
                   : 'bg-background hover:bg-accent border-border'
               )}
               data-testid="provider-select-cursor"
             >
-              <Terminal className="w-4 h-4" />
-              Cursor CLI
+              <CursorIcon className="w-4 h-4" />
+              Cursor
+            </button>
+            <button
+              type="button"
+              onClick={() => handleProviderChange('codex')}
+              className={cn(
+                'px-3 py-2 rounded-md border text-sm font-medium transition-colors flex items-center justify-center gap-2',
+                formData.provider === 'codex'
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-background hover:bg-accent border-border'
+              )}
+              data-testid="provider-select-codex"
+            >
+              <OpenAIIcon className="w-4 h-4" />
+              Codex
             </button>
           </div>
         </div>
@@ -222,7 +254,7 @@ export function ProfileForm({
         {formData.provider === 'cursor' && (
           <div className="space-y-2">
             <Label className="flex items-center gap-2">
-              <Terminal className="w-4 h-4 text-primary" />
+              <CursorIcon className="w-4 h-4 text-primary" />
               Cursor Model
             </Label>
             <div className="flex flex-col gap-2">
@@ -262,13 +294,13 @@ export function ProfileForm({
                           </Badge>
                         )}
                         <Badge
-                          variant={config.tier === 'free' ? 'default' : 'secondary'}
+                          variant="secondary"
                           className={cn(
                             'text-xs',
                             formData.cursorModel === id && 'bg-primary-foreground/20'
                           )}
                         >
-                          {config.tier}
+                          Tier
                         </Badge>
                       </div>
                     </button>
@@ -280,6 +312,68 @@ export function ProfileForm({
                 This model has built-in extended thinking capabilities.
               </p>
             )}
+          </div>
+        )}
+
+        {/* Codex Model Selection */}
+        {formData.provider === 'codex' && (
+          <div className="space-y-2">
+            <Label className="flex items-center gap-2">
+              <OpenAIIcon className="w-4 h-4 text-primary" />
+              Codex Model
+            </Label>
+            <div className="flex flex-col gap-2">
+              {Object.entries(CODEX_MODEL_MAP).map(([_, modelId]) => {
+                const modelConfig = {
+                  label: modelId,
+                  badge: 'Standard' as const,
+                  hasReasoning: false,
+                };
+
+                return (
+                  <button
+                    key={modelId}
+                    type="button"
+                    onClick={() => handleCodexModelChange(modelId)}
+                    className={cn(
+                      'w-full px-3 py-2 rounded-md border text-sm font-medium transition-colors flex items-center justify-between',
+                      formData.codexModel === modelId
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-background hover:bg-accent border-border'
+                    )}
+                    data-testid={`codex-model-select-${modelId}`}
+                  >
+                    <span>{modelConfig.label}</span>
+                    <div className="flex gap-1">
+                      {modelConfig.hasReasoning && (
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            'text-xs',
+                            formData.codexModel === modelId
+                              ? 'border-primary-foreground/50 text-primary-foreground'
+                              : 'border-amber-500/50 text-amber-600 dark:text-amber-400'
+                          )}
+                        >
+                          Reasoning
+                        </Badge>
+                      )}
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          'text-xs',
+                          formData.codexModel === modelId
+                            ? 'border-primary-foreground/50 text-primary-foreground'
+                            : 'border-muted-foreground/50 text-muted-foreground'
+                        )}
+                      >
+                        {modelConfig.badge}
+                      </Badge>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
 

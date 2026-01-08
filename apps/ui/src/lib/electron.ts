@@ -459,7 +459,9 @@ export interface FeaturesAPI {
   update: (
     projectPath: string,
     featureId: string,
-    updates: Partial<Feature>
+    updates: Partial<Feature>,
+    descriptionHistorySource?: 'enhance' | 'edit',
+    enhancementMode?: 'improve' | 'technical' | 'simplify' | 'acceptance'
   ) => Promise<{ success: boolean; feature?: Feature; error?: string }>;
   delete: (projectPath: string, featureId: string) => Promise<{ success: boolean; error?: string }>;
   getAgentOutput: (
@@ -566,6 +568,7 @@ export interface ElectronAPI {
     mimeType: string,
     projectPath?: string
   ) => Promise<SaveImageResult>;
+  isElectron?: boolean;
   checkClaudeCli?: () => Promise<{
     success: boolean;
     status?: string;
@@ -612,79 +615,43 @@ export interface ElectronAPI {
       error?: string;
     }>;
   };
-  setup?: {
-    getClaudeStatus: () => Promise<{
-      success: boolean;
-      status?: string;
-      installed?: boolean;
-      method?: string;
-      version?: string;
-      path?: string;
-      auth?: {
-        authenticated: boolean;
-        method: string;
-        hasCredentialsFile?: boolean;
-        hasToken?: boolean;
-        hasStoredOAuthToken?: boolean;
-        hasStoredApiKey?: boolean;
-        hasEnvApiKey?: boolean;
-        hasEnvOAuthToken?: boolean;
-      };
-      error?: string;
-    }>;
-    installClaude: () => Promise<{
-      success: boolean;
-      message?: string;
-      error?: string;
-    }>;
-    authClaude: () => Promise<{
-      success: boolean;
-      token?: string;
-      requiresManualAuth?: boolean;
-      terminalOpened?: boolean;
-      command?: string;
-      error?: string;
-      message?: string;
-      output?: string;
-    }>;
-    storeApiKey: (
-      provider: string,
-      apiKey: string
-    ) => Promise<{ success: boolean; error?: string }>;
-    deleteApiKey: (
-      provider: string
-    ) => Promise<{ success: boolean; error?: string; message?: string }>;
-    getApiKeys: () => Promise<{
-      success: boolean;
-      hasAnthropicKey: boolean;
-      hasGoogleKey: boolean;
-    }>;
-    getPlatform: () => Promise<{
-      success: boolean;
-      platform: string;
-      arch: string;
-      homeDir: string;
-      isWindows: boolean;
-      isMac: boolean;
-      isLinux: boolean;
-    }>;
-    verifyClaudeAuth: (authMethod?: 'cli' | 'api_key') => Promise<{
-      success: boolean;
-      authenticated: boolean;
-      error?: string;
-    }>;
-    getGhStatus?: () => Promise<{
-      success: boolean;
-      installed: boolean;
-      authenticated: boolean;
-      version: string | null;
-      path: string | null;
-      user: string | null;
-      error?: string;
-    }>;
-    onInstallProgress?: (callback: (progress: any) => void) => () => void;
-    onAuthProgress?: (callback: (progress: any) => void) => () => void;
+  templates?: {
+    clone: (
+      repoUrl: string,
+      projectName: string,
+      parentDir: string
+    ) => Promise<{ success: boolean; projectPath?: string; error?: string }>;
   };
+  backlogPlan?: {
+    generate: (
+      projectPath: string,
+      prompt: string,
+      model?: string
+    ) => Promise<{ success: boolean; error?: string }>;
+    stop: () => Promise<{ success: boolean; error?: string }>;
+    status: () => Promise<{ success: boolean; isRunning?: boolean; error?: string }>;
+    apply: (
+      projectPath: string,
+      plan: {
+        changes: Array<{
+          type: 'add' | 'update' | 'delete';
+          featureId?: string;
+          feature?: Record<string, unknown>;
+          reason: string;
+        }>;
+        summary: string;
+        dependencyUpdates: Array<{
+          featureId: string;
+          removedDependencies: string[];
+          addedDependencies: string[];
+        }>;
+      }
+    ) => Promise<{ success: boolean; appliedChanges?: string[]; error?: string }>;
+    onEvent: (callback: (data: unknown) => void) => () => void;
+  };
+  // Setup API surface is implemented by the main process and mirrored by HttpApiClient.
+  // Keep this intentionally loose to avoid tight coupling between front-end and server types.
+  setup?: any;
   agent?: {
     start: (
       sessionId: string,
@@ -866,11 +833,13 @@ export const isElectron = (): boolean => {
     return false;
   }
 
-  if ((window as any).isElectron === true) {
+  const w = window as any;
+
+  if (w.isElectron === true) {
     return true;
   }
 
-  return window.electronAPI?.isElectron === true;
+  return !!w.electronAPI?.isElectron;
 };
 
 // Check if backend server is available

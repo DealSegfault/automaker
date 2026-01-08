@@ -132,6 +132,9 @@ let saveWindowBoundsTimeout: ReturnType<typeof setTimeout> | null = null;
 // API key for CSRF protection
 let apiKey: string | null = null;
 
+// Track if we're using an external server (Docker API mode)
+let isExternalServerMode = false;
+
 /**
  * Get the relative path to API key file within userData
  */
@@ -688,14 +691,35 @@ app.whenReady().then(async () => {
     }
   }
 
-  // Generate or load API key for CSRF protection (before starting server)
-  ensureApiKey();
-
   try {
-    // Find available ports (prevents conflicts with other apps using same ports)
-    serverPort = await findAvailablePort(DEFAULT_SERVER_PORT);
-    if (serverPort !== DEFAULT_SERVER_PORT) {
-      logger.info('Default server port', DEFAULT_SERVER_PORT, 'in use, using port', serverPort);
+    // Check if we should skip the embedded server (for Docker API mode)
+    const skipEmbeddedServer = process.env.SKIP_EMBEDDED_SERVER === 'true';
+    isExternalServerMode = skipEmbeddedServer;
+
+    if (skipEmbeddedServer) {
+      // Use the default server port (Docker container runs on 3008)
+      serverPort = DEFAULT_SERVER_PORT;
+      logger.info('SKIP_EMBEDDED_SERVER=true, using external server at port', serverPort);
+
+      // Wait for external server to be ready
+      logger.info('Waiting for external server...');
+      await waitForServer(60); // Give Docker container more time to start
+      logger.info('External server is ready');
+
+      // In external server mode, we don't set an API key here.
+      // The renderer will detect external server mode and use session-based
+      // auth like web mode, redirecting to /login where the user enters
+      // the API key from the Docker container logs.
+      logger.info('External server mode: using session-based authentication');
+    } else {
+      // Generate or load API key for CSRF protection (before starting server)
+      ensureApiKey();
+
+      // Find available ports (prevents conflicts with other apps using same ports)
+      serverPort = await findAvailablePort(DEFAULT_SERVER_PORT);
+      if (serverPort !== DEFAULT_SERVER_PORT) {
+        logger.info('Default server port', DEFAULT_SERVER_PORT, 'in use, using port', serverPort);
+      }
     }
 
     staticPort = await findAvailablePort(DEFAULT_STATIC_PORT);
@@ -708,8 +732,10 @@ app.whenReady().then(async () => {
       await startStaticServer();
     }
 
-    // Start backend server
-    await startServer();
+    // Start backend server (unless using external server)
+    if (!skipEmbeddedServer) {
+      await startServer();
+    }
 
     // Create window
     createWindow();
@@ -909,8 +935,18 @@ ipcMain.handle('server:getUrl', async () => {
 });
 
 // Get API key for authentication
+// Returns null in external server mode to trigger session-based auth
 ipcMain.handle('auth:getApiKey', () => {
+  if (isExternalServerMode) {
+    return null;
+  }
   return apiKey;
+});
+
+// Check if running in external server mode (Docker API)
+// Used by renderer to determine auth flow
+ipcMain.handle('auth:isExternalServerMode', () => {
+  return isExternalServerMode;
 });
 
 // Window management - update minimum width based on sidebar state

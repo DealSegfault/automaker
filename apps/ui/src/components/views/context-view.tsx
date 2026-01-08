@@ -496,6 +496,14 @@ export function ContextView() {
       setNewMarkdownContent('');
     } catch (error) {
       logger.error('Failed to create markdown:', error);
+      // Close dialog and reset state even on error to avoid stuck dialog
+      setIsCreateMarkdownOpen(false);
+      setNewMarkdownName('');
+      setNewMarkdownDescription('');
+      setNewMarkdownContent('');
+      toast.error('Failed to create markdown file', {
+        description: error instanceof Error ? error.message : 'Unknown error occurred',
+      });
     }
   };
 

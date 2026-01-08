@@ -7,7 +7,7 @@
 
 import { BaseProvider } from './base-provider.js';
 import type { InstallationStatus, ModelDefinition } from './types.js';
-import { isCursorModel, type ModelProvider } from '@automaker/types';
+import { isCursorModel, isCodexModel, type ModelProvider } from '@automaker/types';
 
 /**
  * Provider registration entry
@@ -156,6 +156,41 @@ export class ProviderFactory {
   static getRegisteredProviderNames(): string[] {
     return Array.from(providerRegistry.keys());
   }
+
+  /**
+   * Check if a specific model supports vision/image input
+   *
+   * @param modelId Model identifier
+   * @returns Whether the model supports vision (defaults to true if model not found)
+   */
+  static modelSupportsVision(modelId: string): boolean {
+    const provider = this.getProviderForModel(modelId);
+    const models = provider.getAvailableModels();
+
+    // Find the model in the available models list
+    for (const model of models) {
+      if (
+        model.id === modelId ||
+        model.modelString === modelId ||
+        model.id.endsWith(`-${modelId}`) ||
+        model.modelString.endsWith(`-${modelId}`) ||
+        model.modelString === modelId.replace(/^(claude|cursor|codex)-/, '') ||
+        model.modelString === modelId.replace(/-(claude|cursor|codex)$/, '')
+      ) {
+        return model.supportsVision ?? true;
+      }
+    }
+
+    // Also try exact match with model string from provider's model map
+    for (const model of models) {
+      if (model.modelString === modelId || model.id === modelId) {
+        return model.supportsVision ?? true;
+      }
+    }
+
+    // Default to true (Claude SDK supports vision by default)
+    return true;
+  }
 }
 
 // =============================================================================
@@ -165,6 +200,7 @@ export class ProviderFactory {
 // Import providers for registration side-effects
 import { ClaudeProvider } from './claude-provider.js';
 import { CursorProvider } from './cursor-provider.js';
+import { CodexProvider } from './codex-provider.js';
 
 // Register Claude provider
 registerProvider('claude', {
@@ -183,4 +219,12 @@ registerProvider('cursor', {
   factory: () => new CursorProvider(),
   canHandleModel: (model: string) => isCursorModel(model),
   priority: 10, // Higher priority - check Cursor models first
+});
+
+// Register Codex provider
+registerProvider('codex', {
+  factory: () => new CodexProvider(),
+  aliases: ['openai'],
+  canHandleModel: (model: string) => isCodexModel(model),
+  priority: 5, // Medium priority - check after Cursor but before Claude
 });

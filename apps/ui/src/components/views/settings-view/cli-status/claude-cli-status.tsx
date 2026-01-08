@@ -1,8 +1,9 @@
 import { Button } from '@/components/ui/button';
-import { Terminal, CheckCircle2, AlertCircle, RefreshCw, XCircle } from 'lucide-react';
+import { CheckCircle2, AlertCircle, RefreshCw, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { CliStatus } from '../shared/types';
 import type { ClaudeAuthStatus } from '@/store/setup-store';
+import { AnthropicIcon } from '@/components/ui/provider-icon';
 
 interface CliStatusProps {
   status: CliStatus | null;
@@ -95,7 +96,7 @@ export function ClaudeCliStatus({ status, authStatus, isChecking, onRefresh }: C
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-500/20 to-brand-600/10 flex items-center justify-center border border-brand-500/20">
-              <Terminal className="w-5 h-5 text-brand-500" />
+              <AnthropicIcon className="w-5 h-5 text-brand-500" />
             </div>
             <h2 className="text-lg font-semibold text-foreground tracking-tight">
               Claude Code CLI

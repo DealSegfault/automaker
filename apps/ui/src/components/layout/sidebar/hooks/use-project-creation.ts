@@ -132,6 +132,9 @@ export function useProjectCreation({
         const api = getElectronAPI();
 
         // Clone template repository
+        if (!api.templates) {
+          throw new Error('Templates API is not available');
+        }
         const cloneResult = await api.templates.clone(template.repoUrl, projectName, parentDir);
         if (!cloneResult.success) {
           throw new Error(cloneResult.error || 'Failed to clone template');
@@ -204,6 +207,9 @@ export function useProjectCreation({
         const api = getElectronAPI();
 
         // Clone custom repository
+        if (!api.templates) {
+          throw new Error('Templates API is not available');
+        }
         const cloneResult = await api.templates.clone(repoUrl, projectName, parentDir);
         if (!cloneResult.success) {
           throw new Error(cloneResult.error || 'Failed to clone repository');

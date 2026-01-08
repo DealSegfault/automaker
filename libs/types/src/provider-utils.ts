@@ -8,11 +8,12 @@
 
 import type { ModelProvider } from './settings.js';
 import { CURSOR_MODEL_MAP, type CursorModelId } from './cursor-models.js';
-import { CLAUDE_MODEL_MAP } from './model.js';
+import { CLAUDE_MODEL_MAP, CODEX_MODEL_MAP, type CodexModelId } from './model.js';
 
 /** Provider prefix constants */
 export const PROVIDER_PREFIXES = {
   cursor: 'cursor-',
+  codex: 'codex-',
   // Add new provider prefixes here
 } as const;
 
@@ -53,12 +54,46 @@ export function isClaudeModel(model: string | undefined | null): boolean {
 }
 
 /**
+ * Check if a model string represents a Codex/OpenAI model
+ *
+ * @param model - Model string to check (e.g., "gpt-5.2", "o1", "codex-gpt-5.2")
+ * @returns true if the model is a Codex model
+ */
+export function isCodexModel(model: string | undefined | null): boolean {
+  if (!model || typeof model !== 'string') return false;
+
+  // Check for explicit codex- prefix
+  if (model.startsWith(PROVIDER_PREFIXES.codex)) {
+    return true;
+  }
+
+  // Check if it's a gpt- model
+  if (model.startsWith('gpt-')) {
+    return true;
+  }
+
+  // Check if it's an o-series model (o1, o3, etc.)
+  if (/^o\d/.test(model)) {
+    return true;
+  }
+
+  // Check if it's in the CODEX_MODEL_MAP
+  const modelValues = Object.values(CODEX_MODEL_MAP);
+  return modelValues.includes(model as CodexModelId);
+}
+
+/**
  * Get the provider for a model string
  *
  * @param model - Model string to check
  * @returns The provider type, defaults to 'claude' for unknown models
  */
 export function getModelProvider(model: string | undefined | null): ModelProvider {
+  // Check Codex first before Cursor, since Cursor also supports gpt models
+  // but bare gpt-* should route to Codex
+  if (isCodexModel(model)) {
+    return 'codex';
+  }
   if (isCursorModel(model)) {
     return 'cursor';
   }
@@ -96,6 +131,7 @@ export function stripProviderPrefix(model: string): string {
  * @example
  * addProviderPrefix('composer-1', 'cursor') // 'cursor-composer-1'
  * addProviderPrefix('cursor-composer-1', 'cursor') // 'cursor-composer-1' (no change)
+ * addProviderPrefix('gpt-5.2', 'codex') // 'codex-gpt-5.2'
  * addProviderPrefix('sonnet', 'claude') // 'sonnet' (Claude doesn't use prefix)
  */
 export function addProviderPrefix(model: string, provider: ModelProvider): string {
@@ -104,6 +140,10 @@ export function addProviderPrefix(model: string, provider: ModelProvider): strin
   if (provider === 'cursor') {
     if (!model.startsWith(PROVIDER_PREFIXES.cursor)) {
       return `${PROVIDER_PREFIXES.cursor}${model}`;
+    }
+  } else if (provider === 'codex') {
+    if (!model.startsWith(PROVIDER_PREFIXES.codex)) {
+      return `${PROVIDER_PREFIXES.codex}${model}`;
     }
   }
   // Claude models don't use prefixes
@@ -123,6 +163,7 @@ export function getBareModelId(model: string): string {
 /**
  * Normalize a model string to its canonical form
  * - For Cursor: adds cursor- prefix if missing
+ * - For Codex: can add codex- prefix (but bare gpt-* is also valid)
  * - For Claude: returns as-is
  *
  * @param model - Model string to normalize
@@ -134,6 +175,20 @@ export function normalizeModelString(model: string | undefined | null): string {
   // If it's a Cursor model without prefix, add the prefix
   if (model in CURSOR_MODEL_MAP && !model.startsWith(PROVIDER_PREFIXES.cursor)) {
     return `${PROVIDER_PREFIXES.cursor}${model}`;
+  }
+
+  // For Codex, bare gpt-* and o-series models are valid canonical forms
+  // Only add prefix if it's in CODEX_MODEL_MAP but doesn't have gpt-/o prefix
+  const codexModelValues = Object.values(CODEX_MODEL_MAP);
+  if (codexModelValues.includes(model as CodexModelId)) {
+    // If it already starts with gpt- or o, it's canonical
+    if (model.startsWith('gpt-') || /^o\d/.test(model)) {
+      return model;
+    }
+    // Otherwise, it might need a prefix (though this is unlikely)
+    if (!model.startsWith(PROVIDER_PREFIXES.codex)) {
+      return `${PROVIDER_PREFIXES.codex}${model}`;
+    }
   }
 
   return model;

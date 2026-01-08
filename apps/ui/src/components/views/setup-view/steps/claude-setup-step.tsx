@@ -15,7 +15,6 @@ import { getElectronAPI } from '@/lib/electron';
 import {
   CheckCircle2,
   Loader2,
-  Terminal,
   Key,
   ArrowRight,
   ArrowLeft,
@@ -31,6 +30,7 @@ import {
 import { toast } from 'sonner';
 import { StatusBadge, TerminalOutput } from '../components';
 import { useCliStatus, useCliInstallation, useTokenSave } from '../hooks';
+import { AnthropicIcon } from '@/components/ui/provider-icon';
 
 interface ClaudeSetupStepProps {
   onNext: () => void;
@@ -310,7 +310,7 @@ export function ClaudeSetupStep({ onNext, onBack, onSkip }: ClaudeSetupStepProps
     <div className="space-y-6">
       <div className="text-center mb-8">
         <div className="w-16 h-16 rounded-xl bg-brand-500/10 flex items-center justify-center mx-auto mb-4">
-          <Terminal className="w-8 h-8 text-brand-500" />
+          <AnthropicIcon className="w-8 h-8 text-brand-500" />
         </div>
         <h2 className="text-2xl font-bold text-foreground mb-2">Claude Code Setup</h2>
         <p className="text-muted-foreground">Configure for code generation</p>
@@ -339,7 +339,7 @@ export function ClaudeSetupStep({ onNext, onBack, onSkip }: ClaudeSetupStepProps
               <AccordionTrigger className="hover:no-underline">
                 <div className="flex items-center justify-between w-full pr-4">
                   <div className="flex items-center gap-3">
-                    <Terminal
+                    <AnthropicIcon
                       className={`w-5 h-5 ${
                         cliVerificationStatus === 'verified'
                           ? 'text-green-500'

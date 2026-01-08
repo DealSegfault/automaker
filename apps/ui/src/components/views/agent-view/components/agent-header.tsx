@@ -7,7 +7,6 @@ interface AgentHeaderProps {
   isConnected: boolean;
   isProcessing: boolean;
   currentTool: string | null;
-  agentError: string | null;
   messagesCount: number;
   showSessionManager: boolean;
   onToggleSessionManager: () => void;
@@ -20,7 +19,6 @@ export function AgentHeader({
   isConnected,
   isProcessing,
   currentTool,
-  agentError,
   messagesCount,
   showSessionManager,
   onToggleSessionManager,
@@ -61,7 +59,6 @@ export function AgentHeader({
             <span className="font-medium">{currentTool}</span>
           </div>
         )}
-        {agentError && <span className="text-xs text-destructive font-medium">{agentError}</span>}
         {currentSessionId && messagesCount > 0 && (
           <Button
             variant="ghost"

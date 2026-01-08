@@ -1,5 +1,5 @@
 /**
- * Shared utilities for Automaker launcher scripts (dev.mjs and start.mjs)
+ * Shared utilities for Automaker launcher scripts (dev.mjs)
  *
  * This module contains cross-platform utilities for:
  * - Process management (ports, killing processes)
@@ -13,7 +13,7 @@
  */
 
 import { execSync } from 'child_process';
-import fsNative from 'fs';
+import fsNative, { statSync } from 'fs';
 import http from 'http';
 import path from 'path';
 import readline from 'readline';
@@ -489,14 +489,21 @@ export function printHeader(title) {
 
 /**
  * Print the application mode menu
+ * @param {object} options - Menu options
+ * @param {boolean} options.isDev - Whether this is dev mode (changes Docker option description)
  */
-export function printModeMenu() {
+export function printModeMenu({ isDev = false } = {}) {
   console.log('═══════════════════════════════════════════════════════');
   console.log('  Select Application Mode:');
   console.log('═══════════════════════════════════════════════════════');
   console.log('  1) Web Application (Browser)');
   console.log('  2) Desktop Application (Electron)');
-  console.log('  3) Docker Container (Isolated)');
+  if (isDev) {
+    console.log('  3) Docker Container (Dev with Live Reload)');
+    console.log('  4) Electron + Docker API (Local Electron, Container API)');
+  } else {
+    console.log('  3) Docker Container (Isolated)');
+  }
   console.log('═══════════════════════════════════════════════════════');
   console.log('');
 }
@@ -661,4 +668,427 @@ export async function ensureDependencies(fs, baseDir) {
       });
     });
   }
+}
+
+// =============================================================================
+// Docker Utilities
+// =============================================================================
+
+/**
+ * Sanitize a project name to be safe for use in shell commands and Docker image names.
+ * Converts to lowercase and removes any characters that aren't alphanumeric.
+ * @param {string} name - Project name to sanitize
+ * @returns {string} - Sanitized project name
+ */
+export function sanitizeProjectName(name) {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Get the current git commit SHA
+ * @param {string} baseDir - Base directory of the git repository
+ * @returns {string|null} - Current commit SHA or null if not available
+ */
+export function getCurrentCommitSha(baseDir) {
+  try {
+    const sha = execSync('git rev-parse HEAD', {
+      encoding: 'utf-8',
+      cwd: baseDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    return sha || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get the commit SHA from a Docker image label
+ * @param {string} imageName - Docker image name
+ * @returns {string|null} - Commit SHA from image label or null if not found
+ */
+export function getImageCommitSha(imageName) {
+  try {
+    const labelValue = execSync(
+      `docker image inspect ${imageName} --format "{{index .Config.Labels \\"automaker.git.commit.sha\\"}}" 2>/dev/null`,
+      { encoding: 'utf-8' }
+    ).trim();
+    return labelValue && labelValue !== 'unknown' && labelValue !== '' ? labelValue : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check if Docker images need to be rebuilt based on git commit SHA
+ * Compares the current git commit with the commit SHA stored in the image labels
+ * @param {string} baseDir - Base directory containing Dockerfile and docker-compose.yml
+ * @returns {{needsRebuild: boolean, reason: string, currentSha: string|null, imageSha: string|null}}
+ */
+export function shouldRebuildDockerImages(baseDir) {
+  try {
+    // Get current git commit SHA
+    const currentSha = getCurrentCommitSha(baseDir);
+    if (!currentSha) {
+      return {
+        needsRebuild: true,
+        reason: 'Could not determine current git commit',
+        currentSha: null,
+        imageSha: null,
+      };
+    }
+
+    // Get project name from docker-compose config, falling back to directory name
+    let projectName;
+    try {
+      const composeConfig = execSync('docker compose config --format json', {
+        encoding: 'utf-8',
+        cwd: baseDir,
+      });
+      const config = JSON.parse(composeConfig);
+      projectName = config.name;
+    } catch {
+      // Fallback handled below
+    }
+
+    // Sanitize project name
+    const sanitizedProjectName = sanitizeProjectName(projectName || path.basename(baseDir));
+    const serverImageName = `${sanitizedProjectName}-server`;
+    const uiImageName = `${sanitizedProjectName}-ui`;
+
+    // Check if images exist
+    const serverExists = checkImageExists(serverImageName);
+    const uiExists = checkImageExists(uiImageName);
+
+    if (!serverExists || !uiExists) {
+      return {
+        needsRebuild: true,
+        reason: 'Docker images do not exist',
+        currentSha,
+        imageSha: null,
+      };
+    }
+
+    // Get commit SHA from server image (both should have the same)
+    const imageSha = getImageCommitSha(serverImageName);
+
+    if (!imageSha) {
+      return {
+        needsRebuild: true,
+        reason: 'Docker images have no commit SHA label (legacy build)',
+        currentSha,
+        imageSha: null,
+      };
+    }
+
+    // Compare commit SHAs
+    if (currentSha !== imageSha) {
+      return {
+        needsRebuild: true,
+        reason: `Code changed: ${imageSha.substring(0, 8)} -> ${currentSha.substring(0, 8)}`,
+        currentSha,
+        imageSha,
+      };
+    }
+
+    return {
+      needsRebuild: false,
+      reason: 'Images are up to date',
+      currentSha,
+      imageSha,
+    };
+  } catch (error) {
+    return {
+      needsRebuild: true,
+      reason: 'Could not check Docker image status',
+      currentSha: null,
+      imageSha: null,
+    };
+  }
+}
+
+/**
+ * Check if a Docker image exists
+ * @param {string} imageName - Docker image name
+ * @returns {boolean} - Whether the image exists
+ */
+function checkImageExists(imageName) {
+  try {
+    execSync(`docker image inspect ${imageName} 2>/dev/null`, {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Launch Docker containers for development with live reload
+ * Uses docker-compose.dev.yml which volume mounts the source code
+ * Also includes docker-compose.override.yml if it exists (for workspace mounts)
+ * @param {object} options - Configuration options
+ * @param {string} options.baseDir - Base directory containing docker-compose.dev.yml
+ * @param {object} options.processes - Processes object to track docker process
+ * @returns {Promise<void>}
+ */
+export async function launchDockerDevContainers({ baseDir, processes }) {
+  log('Launching Docker Container (Development Mode with Live Reload)...', 'blue');
+  console.log('');
+
+  // Check if ANTHROPIC_API_KEY is set
+  if (!process.env.ANTHROPIC_API_KEY) {
+    log('Warning: ANTHROPIC_API_KEY environment variable is not set.', 'yellow');
+    log('The server will require an API key to function.', 'yellow');
+    log('Set it with: export ANTHROPIC_API_KEY=your-key', 'yellow');
+    console.log('');
+  }
+
+  log('Starting development container...', 'yellow');
+  log('Source code is volume mounted for live reload', 'yellow');
+  log('Running npm install inside container (this may take a moment on first run)...', 'yellow');
+  console.log('');
+
+  // Build compose file arguments
+  // Start with dev compose file, then add override if it exists
+  const composeArgs = ['compose', '-f', 'docker-compose.dev.yml'];
+
+  // Check if docker-compose.override.yml exists and include it for workspace mounts
+  const overridePath = path.join(baseDir, 'docker-compose.override.yml');
+  if (fsNative.existsSync(overridePath)) {
+    composeArgs.push('-f', 'docker-compose.override.yml');
+    log('Using docker-compose.override.yml for workspace mount', 'yellow');
+  }
+
+  composeArgs.push('up', '--build');
+
+  // Use docker-compose.dev.yml for development
+  processes.docker = crossSpawn('docker', composeArgs, {
+    stdio: 'inherit',
+    cwd: baseDir,
+    env: {
+      ...process.env,
+    },
+  });
+
+  log('Development container starting...', 'blue');
+  log('UI will be available at: http://localhost:3007 (with HMR)', 'green');
+  log('API will be available at: http://localhost:3008', 'green');
+  console.log('');
+  log('Changes to source files will automatically reload.', 'yellow');
+  log('Press Ctrl+C to stop the container.', 'yellow');
+
+  await new Promise((resolve) => {
+    processes.docker.on('close', resolve);
+  });
+}
+
+/**
+ * Launch only the Docker server container for use with local Electron
+ * Uses docker-compose.dev-server.yml which only runs the backend API
+ * Also includes docker-compose.override.yml if it exists (for workspace mounts)
+ * Automatically launches Electron once the server is healthy.
+ * @param {object} options - Configuration options
+ * @param {string} options.baseDir - Base directory containing docker-compose.dev-server.yml
+ * @param {object} options.processes - Processes object to track docker process
+ * @returns {Promise<void>}
+ */
+export async function launchDockerDevServerContainer({ baseDir, processes }) {
+  log('Launching Docker Server Container + Local Electron...', 'blue');
+  console.log('');
+
+  // Check if ANTHROPIC_API_KEY is set
+  if (!process.env.ANTHROPIC_API_KEY) {
+    log('Warning: ANTHROPIC_API_KEY environment variable is not set.', 'yellow');
+    log('The server will require an API key to function.', 'yellow');
+    log('Set it with: export ANTHROPIC_API_KEY=your-key', 'yellow');
+    console.log('');
+  }
+
+  log('Starting server container...', 'yellow');
+  log('Source code is volume mounted for live reload', 'yellow');
+  log('Running npm install inside container (this may take a moment on first run)...', 'yellow');
+  console.log('');
+
+  // Build compose file arguments
+  // Start with dev-server compose file, then add override if it exists
+  const composeArgs = ['compose', '-f', 'docker-compose.dev-server.yml'];
+
+  // Check if docker-compose.override.yml exists and include it for workspace mounts
+  const overridePath = path.join(baseDir, 'docker-compose.override.yml');
+  if (fsNative.existsSync(overridePath)) {
+    composeArgs.push('-f', 'docker-compose.override.yml');
+    log('Using docker-compose.override.yml for workspace mount', 'yellow');
+  }
+
+  composeArgs.push('up', '--build');
+
+  // Use docker-compose.dev-server.yml for server-only development
+  // Run with piped stdio so we can still see output but also run Electron
+  processes.docker = crossSpawn('docker', composeArgs, {
+    stdio: 'inherit',
+    cwd: baseDir,
+    env: {
+      ...process.env,
+    },
+  });
+
+  log('Server container starting...', 'blue');
+  log('API will be available at: http://localhost:3008', 'green');
+  console.log('');
+
+  // Wait for the server to become healthy
+  log('Waiting for server to be ready...', 'yellow');
+  const serverPort = 3008;
+  const maxRetries = 120; // 2 minutes (first run may need npm install + build)
+  let serverReady = false;
+
+  for (let i = 0; i < maxRetries; i++) {
+    if (await checkHealth(serverPort)) {
+      serverReady = true;
+      break;
+    }
+    await sleep(1000);
+    // Show progress dots every 5 seconds
+    if (i > 0 && i % 5 === 0) {
+      process.stdout.write('.');
+    }
+  }
+
+  if (!serverReady) {
+    console.log('');
+    log('Error: Server container failed to become healthy', 'red');
+    log('Check the Docker logs above for errors', 'red');
+    return;
+  }
+
+  console.log('');
+  log('Server is ready! Launching Electron...', 'green');
+  console.log('');
+
+  // Build shared packages before launching Electron
+  log('Building shared packages...', 'blue');
+  try {
+    await runNpmAndWait(['run', 'build:packages'], { stdio: 'inherit' }, baseDir);
+  } catch (error) {
+    log('Failed to build packages: ' + error.message, 'red');
+    return;
+  }
+
+  // Launch Electron with SKIP_EMBEDDED_SERVER=true
+  // This tells Electron to connect to the external Docker server instead of starting its own
+  processes.electron = crossSpawn('npm', ['run', '_dev:electron'], {
+    stdio: 'inherit',
+    cwd: baseDir,
+    env: {
+      ...process.env,
+      SKIP_EMBEDDED_SERVER: 'true',
+      PORT: '3008',
+      VITE_SERVER_URL: 'http://localhost:3008',
+    },
+  });
+
+  log('Electron launched with SKIP_EMBEDDED_SERVER=true', 'green');
+  log('Changes to server source files will automatically reload.', 'yellow');
+  log('Press Ctrl+C to stop both Electron and the container.', 'yellow');
+  console.log('');
+
+  // Wait for either process to exit
+  await Promise.race([
+    new Promise((resolve) => processes.docker.on('close', resolve)),
+    new Promise((resolve) => processes.electron.on('close', resolve)),
+  ]);
+}
+
+/**
+ * Launch Docker containers with docker-compose (production mode)
+ * Uses git commit SHA to determine if rebuild is needed
+ * @param {object} options - Configuration options
+ * @param {string} options.baseDir - Base directory containing docker-compose.yml
+ * @param {object} options.processes - Processes object to track docker process
+ * @returns {Promise<void>}
+ */
+export async function launchDockerContainers({ baseDir, processes }) {
+  log('Launching Docker Container (Isolated Mode)...', 'blue');
+
+  // Check if ANTHROPIC_API_KEY is set
+  if (!process.env.ANTHROPIC_API_KEY) {
+    log('Warning: ANTHROPIC_API_KEY environment variable is not set.', 'yellow');
+    log('The server will require an API key to function.', 'yellow');
+    log('Set it with: export ANTHROPIC_API_KEY=your-key', 'yellow');
+    console.log('');
+  }
+
+  // Check if rebuild is needed based on git commit SHA
+  const rebuildCheck = shouldRebuildDockerImages(baseDir);
+
+  if (rebuildCheck.needsRebuild) {
+    log(`Rebuild needed: ${rebuildCheck.reason}`, 'yellow');
+
+    if (rebuildCheck.currentSha) {
+      log(`Building images for commit: ${rebuildCheck.currentSha.substring(0, 8)}`, 'blue');
+    }
+    console.log('');
+
+    // Build with commit SHA label
+    const buildArgs = ['compose', 'build'];
+    if (rebuildCheck.currentSha) {
+      buildArgs.push('--build-arg', `GIT_COMMIT_SHA=${rebuildCheck.currentSha}`);
+    }
+
+    const buildProcess = crossSpawn('docker', buildArgs, {
+      stdio: 'inherit',
+      cwd: baseDir,
+    });
+
+    await new Promise((resolve, reject) => {
+      buildProcess.on('close', (code) => {
+        if (code !== 0) {
+          log('Build failed. Exiting.', 'red');
+          reject(new Error(`Docker build failed with code ${code}`));
+        } else {
+          log('Build complete. Starting containers...', 'green');
+          console.log('');
+          resolve();
+        }
+      });
+      buildProcess.on('error', (err) => reject(err));
+    });
+
+    // Start containers (already built above)
+    processes.docker = crossSpawn('docker', ['compose', 'up'], {
+      stdio: 'inherit',
+      cwd: baseDir,
+      env: {
+        ...process.env,
+      },
+    });
+  } else {
+    log(
+      `Images are up to date (commit: ${rebuildCheck.currentSha?.substring(0, 8) || 'unknown'})`,
+      'green'
+    );
+    log('Starting Docker containers...', 'yellow');
+    console.log('');
+
+    // Start containers without rebuilding
+    processes.docker = crossSpawn('docker', ['compose', 'up'], {
+      stdio: 'inherit',
+      cwd: baseDir,
+      env: {
+        ...process.env,
+      },
+    });
+  }
+
+  log('Docker containers starting...', 'blue');
+  log('UI will be available at: http://localhost:3007', 'green');
+  log('API will be available at: http://localhost:3008', 'green');
+  console.log('');
+  log('Press Ctrl+C to stop the containers.', 'yellow');
+
+  await new Promise((resolve) => {
+    processes.docker.on('close', resolve);
+  });
 }

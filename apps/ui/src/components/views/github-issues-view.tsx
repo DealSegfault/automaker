@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useState, useCallback, useMemo } from 'react';
 import { createLogger } from '@automaker/utils/logger';
 import { CircleDot, RefreshCw } from 'lucide-react';

@@ -217,6 +217,7 @@ export interface CursorAuthStatus {
   authenticated: boolean;
   method: 'login' | 'api_key' | 'none';
   hasCredentialsFile?: boolean;
+  error?: string;
 }
 
 /**

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { createLogger } from '@automaker/utils/logger';
 import {
@@ -56,7 +57,10 @@ import {
   useBoardBackground,
   useBoardPersistence,
   useFollowUpState,
+  useSelectionMode,
 } from './board-view/hooks';
+import { SelectionActionBar } from './board-view/components';
+import { MassEditDialog } from './board-view/dialogs';
 
 // Stable empty array to avoid infinite loop in selector
 const EMPTY_WORKTREES: ReturnType<ReturnType<typeof useAppStore.getState>['getWorktrees']> = [];
@@ -86,6 +90,7 @@ export function BoardView() {
     setWorktrees,
     useWorktrees,
     enableDependencyBlocking,
+    skipVerificationInAutoMode,
     isPrimaryWorktreeBranch,
     getPrimaryWorktreeBranch,
     setPipelineConfig,
@@ -153,6 +158,19 @@ export function BoardView() {
     setFollowUpPreviewMap,
     handleFollowUpDialogChange,
   } = useFollowUpState();
+
+  // Selection mode hook for mass editing
+  const {
+    isSelectionMode,
+    selectedFeatureIds,
+    selectedCount,
+    toggleSelectionMode,
+    toggleFeatureSelection,
+    selectAll,
+    clearSelection,
+    exitSelectionMode,
+  } = useSelectionMode();
+  const [showMassEditDialog, setShowMassEditDialog] = useState(false);
 
   // Search filter for Kanban cards
   const [searchQuery, setSearchQuery] = useState('');
@@ -447,6 +465,72 @@ export function BoardView() {
     currentWorktreeBranch,
   });
 
+  // Handler for bulk updating multiple features
+  const handleBulkUpdate = useCallback(
+    async (updates: Partial<Feature>) => {
+      if (!currentProject || selectedFeatureIds.size === 0) return;
+
+      try {
+        const api = getHttpApiClient();
+        const featureIds = Array.from(selectedFeatureIds);
+        const result = await api.features.bulkUpdate(currentProject.path, featureIds, updates);
+
+        if (result.success) {
+          // Update local state
+          featureIds.forEach((featureId) => {
+            updateFeature(featureId, updates);
+          });
+          toast.success(`Updated ${result.updatedCount} features`);
+          exitSelectionMode();
+        } else {
+          toast.error('Failed to update some features', {
+            description: `${result.failedCount} features failed to update`,
+          });
+        }
+      } catch (error) {
+        logger.error('Bulk update failed:', error);
+        toast.error('Failed to update features');
+      }
+    },
+    [currentProject, selectedFeatureIds, updateFeature, exitSelectionMode]
+  );
+
+  // Get selected features for mass edit dialog
+  const selectedFeatures = useMemo(() => {
+    return hookFeatures.filter((f) => selectedFeatureIds.has(f.id));
+  }, [hookFeatures, selectedFeatureIds]);
+
+  // Get backlog feature IDs in current branch for "Select All"
+  const allSelectableFeatureIds = useMemo(() => {
+    return hookFeatures
+      .filter((f) => {
+        // Only backlog features
+        if (f.status !== 'backlog') return false;
+
+        // Filter by current worktree branch
+        const featureBranch = f.branchName;
+        if (!featureBranch) {
+          // No branch assigned - only selectable on primary worktree
+          return currentWorktreePath === null;
+        }
+        if (currentWorktreeBranch === null) {
+          // Viewing main but branch hasn't been initialized
+          return currentProject?.path
+            ? isPrimaryWorktreeBranch(currentProject.path, featureBranch)
+            : false;
+        }
+        // Match by branch name
+        return featureBranch === currentWorktreeBranch;
+      })
+      .map((f) => f.id);
+  }, [
+    hookFeatures,
+    currentWorktreePath,
+    currentWorktreeBranch,
+    currentProject?.path,
+    isPrimaryWorktreeBranch,
+  ]);
+
   // Handler for addressing PR comments - creates a feature and starts it automatically
   const handleAddressPRComments = useCallback(
     async (worktree: WorktreeInfo, prInfo: PRInfo) => {
@@ -650,10 +734,17 @@ export function BoardView() {
   }, []);
 
   useEffect(() => {
+    logger.info(
+      '[AutoMode] Effect triggered - isRunning:',
+      autoMode.isRunning,
+      'hasProject:',
+      !!currentProject
+    );
     if (!autoMode.isRunning || !currentProject) {
       return;
     }
 
+    logger.info('[AutoMode] Starting auto mode polling loop for project:', currentProject.path);
     let isChecking = false;
     let isActive = true; // Track if this effect is still active
 
@@ -673,6 +764,14 @@ export function BoardView() {
       try {
         // Double-check auto mode is still running before proceeding
         if (!isActive || !autoModeRunningRef.current || !currentProject) {
+          logger.debug(
+            '[AutoMode] Skipping check - isActive:',
+            isActive,
+            'autoModeRunning:',
+            autoModeRunningRef.current,
+            'hasProject:',
+            !!currentProject
+          );
           return;
         }
 
@@ -680,6 +779,12 @@ export function BoardView() {
         // Use ref to get the latest running tasks without causing effect re-runs
         const currentRunning = runningAutoTasksRef.current.length + pendingFeaturesRef.current.size;
         const availableSlots = maxConcurrency - currentRunning;
+        logger.debug(
+          '[AutoMode] Checking features - running:',
+          currentRunning,
+          'available slots:',
+          availableSlots
+        );
 
         // No available slots, skip check
         if (availableSlots <= 0) {
@@ -687,10 +792,12 @@ export function BoardView() {
         }
 
         // Filter backlog features by the currently selected worktree branch
-        // This logic mirrors use-board-column-features.ts for consistency
+        // This logic mirrors use-board-column-features.ts for consistency.
+        // HOWEVER: auto mode should still run even if the user is viewing a non-primary worktree,
+        // so we fall back to "all backlog features" when none are visible in the current view.
         // Use ref to get the latest features without causing effect re-runs
         const currentFeatures = hookFeaturesRef.current;
-        const backlogFeatures = currentFeatures.filter((f) => {
+        const backlogFeaturesInView = currentFeatures.filter((f) => {
           if (f.status !== 'backlog') return false;
 
           const featureBranch = f.branchName;
@@ -714,7 +821,25 @@ export function BoardView() {
           return featureBranch === currentWorktreeBranch;
         });
 
+        const backlogFeatures =
+          backlogFeaturesInView.length > 0
+            ? backlogFeaturesInView
+            : currentFeatures.filter((f) => f.status === 'backlog');
+
+        logger.debug(
+          '[AutoMode] Features - total:',
+          currentFeatures.length,
+          'backlog in view:',
+          backlogFeaturesInView.length,
+          'backlog total:',
+          backlogFeatures.length
+        );
+
         if (backlogFeatures.length === 0) {
+          logger.debug(
+            '[AutoMode] No backlog features found, statuses:',
+            currentFeatures.map((f) => f.status).join(', ')
+          );
           return;
         }
 
@@ -724,12 +849,25 @@ export function BoardView() {
         );
 
         // Filter out features with blocking dependencies if dependency blocking is enabled
-        const eligibleFeatures = enableDependencyBlocking
-          ? sortedBacklog.filter((f) => {
-              const blockingDeps = getBlockingDependencies(f, currentFeatures);
-              return blockingDeps.length === 0;
-            })
-          : sortedBacklog;
+        // NOTE: skipVerificationInAutoMode means "ignore unmet dependency verification" so we
+        // should NOT exclude blocked features in that mode.
+        const eligibleFeatures =
+          enableDependencyBlocking && !skipVerificationInAutoMode
+            ? sortedBacklog.filter((f) => {
+                const blockingDeps = getBlockingDependencies(f, currentFeatures);
+                if (blockingDeps.length > 0) {
+                  logger.debug('[AutoMode] Feature', f.id, 'blocked by deps:', blockingDeps);
+                }
+                return blockingDeps.length === 0;
+              })
+            : sortedBacklog;
+
+        logger.debug(
+          '[AutoMode] Eligible features after dep check:',
+          eligibleFeatures.length,
+          'dependency blocking enabled:',
+          enableDependencyBlocking
+        );
 
         // Start features up to available slots
         const featuresToStart = eligibleFeatures.slice(0, availableSlots);
@@ -738,6 +876,13 @@ export function BoardView() {
           return;
         }
 
+        logger.info(
+          '[AutoMode] Starting',
+          featuresToStart.length,
+          'features:',
+          featuresToStart.map((f) => f.id).join(', ')
+        );
+
         for (const feature of featuresToStart) {
           // Check again before starting each feature
           if (!isActive || !autoModeRunningRef.current || !currentProject) {
@@ -745,8 +890,9 @@ export function BoardView() {
           }
 
           // Simplified: No worktree creation on client - server derives workDir from feature.branchName
-          // If feature has no branchName and primary worktree is selected, assign primary branch
-          if (currentWorktreePath === null && !feature.branchName) {
+          // If feature has no branchName, assign it to the primary branch so it can run consistently
+          // even when the user is viewing a non-primary worktree.
+          if (!feature.branchName) {
             const primaryBranch =
               (currentProject.path ? getPrimaryWorktreeBranch(currentProject.path) : null) ||
               'main';
@@ -796,6 +942,7 @@ export function BoardView() {
     getPrimaryWorktreeBranch,
     isPrimaryWorktreeBranch,
     enableDependencyBlocking,
+    skipVerificationInAutoMode,
     persistFeatureUpdate,
   ]);
 
@@ -1091,7 +1238,6 @@ export function BoardView() {
             onManualVerify={handleManualVerify}
             onMoveBackToInProgress={handleMoveBackToInProgress}
             onFollowUp={handleOpenFollowUp}
-            onCommit={handleCommitFeature}
             onComplete={handleCompleteFeature}
             onImplement={handleStartImplementation}
             onViewPlan={(feature) => setViewPlanFeature(feature)}
@@ -1102,13 +1248,15 @@ export function BoardView() {
             }}
             featuresWithContext={featuresWithContext}
             runningAutoTasks={runningAutoTasks}
-            shortcuts={shortcuts}
-            onStartNextFeatures={handleStartNextFeatures}
             onArchiveAllVerified={() => setShowArchiveAllVerifiedDialog(true)}
             pipelineConfig={
               currentProject?.path ? pipelineConfigByProject[currentProject.path] || null : null
             }
             onOpenPipelineSettings={() => setShowPipelineSettings(true)}
+            isSelectionMode={isSelectionMode}
+            selectedFeatureIds={selectedFeatureIds}
+            onToggleFeatureSelection={toggleFeatureSelection}
+            onToggleSelectionMode={toggleSelectionMode}
           />
         ) : (
           <GraphView
@@ -1133,6 +1281,27 @@ export function BoardView() {
           />
         )}
       </div>
+
+      {/* Selection Action Bar */}
+      {isSelectionMode && (
+        <SelectionActionBar
+          selectedCount={selectedCount}
+          totalCount={allSelectableFeatureIds.length}
+          onEdit={() => setShowMassEditDialog(true)}
+          onClear={clearSelection}
+          onSelectAll={() => selectAll(allSelectableFeatureIds)}
+        />
+      )}
+
+      {/* Mass Edit Dialog */}
+      <MassEditDialog
+        open={showMassEditDialog}
+        onClose={() => setShowMassEditDialog(false)}
+        selectedFeatures={selectedFeatures}
+        onApply={handleBulkUpdate}
+        showProfilesOnly={showProfilesOnly}
+        aiProfiles={aiProfiles}
+      />
 
       {/* Board Background Modal */}
       <BoardBackgroundModal

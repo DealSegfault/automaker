@@ -6,11 +6,9 @@
 import { createLogger } from '@automaker/utils/logger';
 import { getHttpApiClient } from './http-api-client';
 import { getElectronAPI } from './electron';
-import { getItem, setItem } from './storage';
+import { useAppStore } from '@/store/app-store';
 
 const logger = createLogger('WorkspaceConfig');
-
-const LAST_PROJECT_DIR_KEY = 'automaker:lastProjectDir';
 
 /**
  * Browser-compatible path join utility
@@ -67,10 +65,10 @@ export async function getDefaultWorkspaceDirectory(): Promise<string | null> {
       }
 
       // If ALLOWED_ROOT_DIRECTORY is not set, use priority:
-      // 1. Last used directory
+      // 1. Last used directory (from store, synced via API)
       // 2. Documents/Automaker
       // 3. DATA_DIR as fallback
-      const lastUsedDir = getItem(LAST_PROJECT_DIR_KEY);
+      const lastUsedDir = useAppStore.getState().lastProjectDir;
 
       if (lastUsedDir) {
         return lastUsedDir;
@@ -89,7 +87,7 @@ export async function getDefaultWorkspaceDirectory(): Promise<string | null> {
     }
 
     // If API call failed, still try last used dir and Documents
-    const lastUsedDir = getItem(LAST_PROJECT_DIR_KEY);
+    const lastUsedDir = useAppStore.getState().lastProjectDir;
 
     if (lastUsedDir) {
       return lastUsedDir;
@@ -101,7 +99,7 @@ export async function getDefaultWorkspaceDirectory(): Promise<string | null> {
     logger.error('Failed to get default workspace directory:', error);
 
     // On error, try last used dir and Documents
-    const lastUsedDir = getItem(LAST_PROJECT_DIR_KEY);
+    const lastUsedDir = useAppStore.getState().lastProjectDir;
 
     if (lastUsedDir) {
       return lastUsedDir;
@@ -113,9 +111,9 @@ export async function getDefaultWorkspaceDirectory(): Promise<string | null> {
 }
 
 /**
- * Saves the last used project directory to localStorage
+ * Saves the last used project directory to the store (synced via API)
  * @param path - The directory path to save
  */
 export function saveLastProjectDirectory(path: string): void {
-  setItem(LAST_PROJECT_DIR_KEY, path);
+  useAppStore.getState().setLastProjectDir(path);
 }

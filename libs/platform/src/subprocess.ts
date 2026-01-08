@@ -44,11 +44,15 @@ export async function* spawnJSONLProcess(options: SubprocessOptions): AsyncGener
     console.log(`[SubprocessManager] Passing ${stdinData.length} bytes via stdin`);
   }
 
+  // On Windows, .cmd files must be run through shell (cmd.exe)
+  const needsShell = process.platform === 'win32' && command.toLowerCase().endsWith('.cmd');
+
   const childProcess: ChildProcess = spawn(command, args, {
     cwd,
     env: processEnv,
     // Use 'pipe' for stdin when we need to write data, otherwise 'ignore'
     stdio: [stdinData ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    shell: needsShell,
   });
 
   // Write stdin data if provided
@@ -194,10 +198,14 @@ export async function spawnProcess(options: SubprocessOptions): Promise<Subproce
   };
 
   return new Promise((resolve, reject) => {
+    // On Windows, .cmd files must be run through shell (cmd.exe)
+    const needsShell = process.platform === 'win32' && command.toLowerCase().endsWith('.cmd');
+
     const childProcess = spawn(command, args, {
       cwd,
       env: processEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
+      shell: needsShell,
     });
 
     let stdout = '';

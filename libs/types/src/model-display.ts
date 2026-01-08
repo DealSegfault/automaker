@@ -6,7 +6,10 @@
  */
 
 import type { ModelAlias, ThinkingLevel, ModelProvider } from './settings.js';
+import type { ReasoningEffort } from './provider.js';
 import type { CursorModelId } from './cursor-models.js';
+import type { AgentModel, CodexModelId } from './model.js';
+import { CODEX_MODEL_MAP } from './model.js';
 
 /**
  * ModelOption - Display metadata for a model option in the UI
@@ -64,6 +67,61 @@ export const CLAUDE_MODELS: ModelOption[] = [
 ];
 
 /**
+ * Codex model options with full metadata for UI display
+ * Official models from https://developers.openai.com/codex/models/
+ */
+export const CODEX_MODELS: (ModelOption & { hasReasoning?: boolean })[] = [
+  {
+    id: CODEX_MODEL_MAP.gpt52Codex,
+    label: 'GPT-5.2-Codex',
+    description: 'Most advanced agentic coding model (default for ChatGPT users).',
+    badge: 'Premium',
+    provider: 'codex',
+    hasReasoning: true,
+  },
+  {
+    id: CODEX_MODEL_MAP.gpt5Codex,
+    label: 'GPT-5-Codex',
+    description: 'Purpose-built for Codex CLI (default for CLI users).',
+    badge: 'Balanced',
+    provider: 'codex',
+    hasReasoning: true,
+  },
+  {
+    id: CODEX_MODEL_MAP.gpt5CodexMini,
+    label: 'GPT-5-Codex-Mini',
+    description: 'Faster workflows for code Q&A and editing.',
+    badge: 'Speed',
+    provider: 'codex',
+    hasReasoning: false,
+  },
+  {
+    id: CODEX_MODEL_MAP.codex1,
+    label: 'Codex-1',
+    description: 'o3-based model optimized for software engineering.',
+    badge: 'Premium',
+    provider: 'codex',
+    hasReasoning: true,
+  },
+  {
+    id: CODEX_MODEL_MAP.codexMiniLatest,
+    label: 'Codex-Mini-Latest',
+    description: 'o4-mini-based model for faster workflows.',
+    badge: 'Balanced',
+    provider: 'codex',
+    hasReasoning: false,
+  },
+  {
+    id: CODEX_MODEL_MAP.gpt5,
+    label: 'GPT-5',
+    description: 'GPT-5 base flagship model.',
+    badge: 'Balanced',
+    provider: 'codex',
+    hasReasoning: true,
+  },
+];
+
+/**
  * Thinking level options with display labels
  *
  * Ordered from least to most intensive reasoning.
@@ -90,6 +148,43 @@ export const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
 };
 
 /**
+ * ReasoningEffortOption - Display metadata for reasoning effort selection (Codex/OpenAI)
+ */
+export interface ReasoningEffortOption {
+  /** Reasoning effort identifier */
+  id: ReasoningEffort;
+  /** Display label */
+  label: string;
+  /** Description of what this level does */
+  description: string;
+}
+
+/**
+ * Reasoning effort options for Codex/OpenAI models
+ * All models support reasoning effort levels
+ */
+export const REASONING_EFFORT_LEVELS: ReasoningEffortOption[] = [
+  { id: 'none', label: 'None', description: 'No reasoning tokens (GPT-5.1 models only)' },
+  { id: 'minimal', label: 'Minimal', description: 'Very quick reasoning' },
+  { id: 'low', label: 'Low', description: 'Quick responses for simpler queries' },
+  { id: 'medium', label: 'Medium', description: 'Balance between depth and speed (default)' },
+  { id: 'high', label: 'High', description: 'Maximizes reasoning depth for critical tasks' },
+  { id: 'xhigh', label: 'XHigh', description: 'Highest level for gpt-5.1-codex-max and newer' },
+];
+
+/**
+ * Map of reasoning effort levels to short display labels
+ */
+export const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
+  none: 'None',
+  minimal: 'Min',
+  low: 'Low',
+  medium: 'Med',
+  high: 'High',
+  xhigh: 'XHigh',
+};
+
+/**
  * Get display name for a model
  *
  * @param model - Model identifier or full model string
@@ -107,6 +202,12 @@ export function getModelDisplayName(model: ModelAlias | string): string {
     haiku: 'Claude Haiku',
     sonnet: 'Claude Sonnet',
     opus: 'Claude Opus',
+    [CODEX_MODEL_MAP.gpt52Codex]: 'GPT-5.2-Codex',
+    [CODEX_MODEL_MAP.gpt5Codex]: 'GPT-5-Codex',
+    [CODEX_MODEL_MAP.gpt5CodexMini]: 'GPT-5-Codex-Mini',
+    [CODEX_MODEL_MAP.codex1]: 'Codex-1',
+    [CODEX_MODEL_MAP.codexMiniLatest]: 'Codex-Mini-Latest',
+    [CODEX_MODEL_MAP.gpt5]: 'GPT-5',
   };
   return displayNames[model] || model;
 }

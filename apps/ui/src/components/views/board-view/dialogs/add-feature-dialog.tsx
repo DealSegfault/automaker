@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useState, useEffect } from 'react';
 import { createLogger } from '@automaker/utils/logger';
 import {

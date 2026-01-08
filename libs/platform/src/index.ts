@@ -93,6 +93,9 @@ export {
   getClaudeSettingsPath,
   getClaudeStatsCachePath,
   getClaudeProjectsDir,
+  getCodexCliPaths,
+  getCodexConfigDir,
+  getCodexAuthPath,
   getShellPaths,
   getExtendedPath,
   // Node.js paths
@@ -120,6 +123,9 @@ export {
   findClaudeCliPath,
   getClaudeAuthIndicators,
   type ClaudeAuthIndicators,
+  findCodexCliPath,
+  getCodexAuthIndicators,
+  type CodexAuthIndicators,
   // Electron userData operations
   setElectronUserDataPath,
   getElectronUserDataPath,

@@ -79,7 +79,7 @@ describe('claude-provider.ts', () => {
       });
     });
 
-    it('should use default allowed tools when not specified', async () => {
+    it('should not include allowedTools when not specified (caller decides via sdk-options)', async () => {
       vi.mocked(sdk.query).mockReturnValue(
         (async function* () {
           yield { type: 'text', text: 'test' };
@@ -95,39 +95,8 @@ describe('claude-provider.ts', () => {
 
       expect(sdk.query).toHaveBeenCalledWith({
         prompt: 'Test',
-        options: expect.objectContaining({
-          // Note: 'Skill' and 'Task' tools are added dynamically by agent-service.ts
-          // based on settings, not included in base default tools
-          allowedTools: ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'],
-        }),
-      });
-    });
-
-    it('should pass sandbox configuration when provided', async () => {
-      vi.mocked(sdk.query).mockReturnValue(
-        (async function* () {
-          yield { type: 'text', text: 'test' };
-        })()
-      );
-
-      const generator = provider.executeQuery({
-        prompt: 'Test',
-        cwd: '/test',
-        sandbox: {
-          enabled: true,
-          autoAllowBashIfSandboxed: true,
-        },
-      });
-
-      await collectAsyncGenerator(generator);
-
-      expect(sdk.query).toHaveBeenCalledWith({
-        prompt: 'Test',
-        options: expect.objectContaining({
-          sandbox: {
-            enabled: true,
-            autoAllowBashIfSandboxed: true,
-          },
+        options: expect.not.objectContaining({
+          allowedTools: expect.anything(),
         }),
       });
     });

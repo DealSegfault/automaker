@@ -4,7 +4,7 @@
  */
 
 import path from 'path';
-import type { Feature } from '@automaker/types';
+import type { Feature, DescriptionHistoryEntry } from '@automaker/types';
 import { createLogger } from '@automaker/utils';
 import * as secureFs from '../lib/secure-fs.js';
 import {
@@ -274,6 +274,16 @@ export class FeatureLoader {
       featureData.imagePaths
     );
 
+    // Initialize description history with the initial description
+    const initialHistory: DescriptionHistoryEntry[] = [];
+    if (featureData.description && featureData.description.trim()) {
+      initialHistory.push({
+        description: featureData.description,
+        timestamp: new Date().toISOString(),
+        source: 'initial',
+      });
+    }
+
     // Ensure feature has required fields
     const feature: Feature = {
       category: featureData.category || 'Uncategorized',
@@ -281,6 +291,7 @@ export class FeatureLoader {
       ...featureData,
       id: featureId,
       imagePaths: migratedImagePaths,
+      descriptionHistory: initialHistory,
     };
 
     // Write feature.json
@@ -292,11 +303,18 @@ export class FeatureLoader {
 
   /**
    * Update a feature (partial updates supported)
+   * @param projectPath - Path to the project
+   * @param featureId - ID of the feature to update
+   * @param updates - Partial feature updates
+   * @param descriptionHistorySource - Source of description change ('enhance' or 'edit')
+   * @param enhancementMode - Enhancement mode if source is 'enhance'
    */
   async update(
     projectPath: string,
     featureId: string,
-    updates: Partial<Feature>
+    updates: Partial<Feature>,
+    descriptionHistorySource?: 'enhance' | 'edit',
+    enhancementMode?: 'improve' | 'technical' | 'simplify' | 'acceptance'
   ): Promise<Feature> {
     const feature = await this.get(projectPath, featureId);
     if (!feature) {
@@ -313,11 +331,28 @@ export class FeatureLoader {
       updatedImagePaths = await this.migrateImages(projectPath, featureId, updates.imagePaths);
     }
 
+    // Track description history if description changed
+    let updatedHistory = feature.descriptionHistory || [];
+    if (
+      updates.description !== undefined &&
+      updates.description !== feature.description &&
+      updates.description.trim()
+    ) {
+      const historyEntry: DescriptionHistoryEntry = {
+        description: updates.description,
+        timestamp: new Date().toISOString(),
+        source: descriptionHistorySource || 'edit',
+        ...(descriptionHistorySource === 'enhance' && enhancementMode ? { enhancementMode } : {}),
+      };
+      updatedHistory = [...updatedHistory, historyEntry];
+    }
+
     // Merge updates
     const updatedFeature: Feature = {
       ...feature,
       ...updates,
       ...(updatedImagePaths !== undefined ? { imagePaths: updatedImagePaths } : {}),
+      descriptionHistory: updatedHistory,
     };
 
     // Write back to file

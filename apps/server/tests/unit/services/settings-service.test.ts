@@ -144,6 +144,33 @@ describe('settings-service.ts', () => {
       expect(updated.keyboardShortcuts.agent).toBe(DEFAULT_GLOBAL_SETTINGS.keyboardShortcuts.agent);
     });
 
+    it('should not overwrite non-empty projects with an empty array (data loss guard)', async () => {
+      const initial: GlobalSettings = {
+        ...DEFAULT_GLOBAL_SETTINGS,
+        theme: 'solarized' as GlobalSettings['theme'],
+        projects: [
+          {
+            id: 'proj1',
+            name: 'Project 1',
+            path: '/tmp/project-1',
+            lastOpened: new Date().toISOString(),
+          },
+        ] as any,
+      };
+      const settingsPath = path.join(testDataDir, 'settings.json');
+      await fs.writeFile(settingsPath, JSON.stringify(initial, null, 2));
+
+      const updated = await settingsService.updateGlobalSettings({
+        projects: [],
+        theme: 'light',
+      } as any);
+
+      expect(updated.projects.length).toBe(1);
+      expect((updated.projects as any)[0]?.id).toBe('proj1');
+      // Theme should be preserved in the same request if it attempted to wipe projects
+      expect(updated.theme).toBe('solarized');
+    });
+
     it('should create data directory if it does not exist', async () => {
       const newDataDir = path.join(os.tmpdir(), `new-data-dir-${Date.now()}`);
       const newService = new SettingsService(newDataDir);

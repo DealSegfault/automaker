@@ -180,7 +180,7 @@ describe('model-resolver', () => {
 
       it('should use custom default for unknown model key', () => {
         const customDefault = 'claude-opus-4-20241113';
-        const result = resolveModelString('gpt-4', customDefault);
+        const result = resolveModelString('truly-unknown-model', customDefault);
 
         expect(result).toBe(customDefault);
       });
