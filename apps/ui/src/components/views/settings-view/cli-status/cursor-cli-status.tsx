@@ -1,7 +1,10 @@
+import { useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { CheckCircle2, AlertCircle, RefreshCw, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { CursorIcon } from '@/components/ui/provider-icon';
+import { getElectronAPI } from '@/lib/electron';
+import { toast } from 'sonner';
 
 interface CursorStatus {
   installed: boolean;
@@ -201,6 +204,60 @@ export function ModelConfigSkeleton() {
 }
 
 export function CursorCliStatus({ status, isChecking, onRefresh }: CursorCliStatusProps) {
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [isDeauthenticating, setIsDeauthenticating] = useState(false);
+
+  const handleSignIn = useCallback(async () => {
+    setIsAuthenticating(true);
+    try {
+      const api = getElectronAPI();
+      const result = await api.setup.authCursor();
+
+      if (result.success) {
+        toast.success('Signed In', {
+          description: 'Successfully authenticated Cursor CLI',
+        });
+        onRefresh();
+      } else if (result.error) {
+        toast.error('Authentication Failed', {
+          description: result.error,
+        });
+      }
+    } catch (error) {
+      toast.error('Authentication Failed', {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
+    } finally {
+      setIsAuthenticating(false);
+    }
+  }, [onRefresh]);
+
+  const handleSignOut = useCallback(async () => {
+    setIsDeauthenticating(true);
+    try {
+      const api = getElectronAPI();
+      const result = await api.setup.deauthCursor();
+
+      if (result.success) {
+        toast.success('Signed Out', {
+          description: 'Successfully signed out from Cursor CLI',
+        });
+        // Refresh status after successful logout
+        onRefresh();
+      } else if (result.error) {
+        toast.error('Sign Out Failed', {
+          description: result.error,
+        });
+      }
+    } catch (error) {
+      toast.error('Sign Out Failed', {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
+    } finally {
+      setIsDeauthenticating(false);
+    }
+  }, [onRefresh]);
+
   if (!status) return <CursorCliStatusSkeleton />;
 
   return (
@@ -262,7 +319,7 @@ export function CursorCliStatus({ status, isChecking, onRefresh }: CursorCliStat
 
             {/* Authentication Status */}
             {status.authenticated ? (
-              <div className="flex items-center gap-3 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+              <div className="flex items-start gap-3 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
                 <div className="w-10 h-10 rounded-xl bg-emerald-500/15 flex items-center justify-center border border-emerald-500/20 shrink-0">
                   <CheckCircle2 className="w-5 h-5 text-emerald-500" />
                 </div>
@@ -276,6 +333,15 @@ export function CursorCliStatus({ status, isChecking, onRefresh }: CursorCliStat
                       </span>
                     </p>
                   </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSignOut}
+                    disabled={isDeauthenticating}
+                    className="mt-3 h-8 text-xs"
+                  >
+                    {isDeauthenticating ? 'Signing Out...' : 'Sign Out'}
+                  </Button>
                 </div>
               </div>
             ) : (
@@ -286,9 +352,17 @@ export function CursorCliStatus({ status, isChecking, onRefresh }: CursorCliStat
                 <div className="flex-1">
                   <p className="text-sm font-medium text-amber-400">Not Authenticated</p>
                   <p className="text-xs text-amber-400/70 mt-1">
-                    Run <code className="font-mono bg-amber-500/10 px-1 rounded">cursor auth</code>{' '}
-                    to authenticate with Cursor.
+                    Click Sign In below to get authentication instructions.
                   </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSignIn}
+                    disabled={isAuthenticating}
+                    className="mt-3 h-8 text-xs"
+                  >
+                    {isAuthenticating ? 'Requesting...' : 'Sign In'}
+                  </Button>
                 </div>
               </div>
             )}

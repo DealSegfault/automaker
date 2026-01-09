@@ -1,6 +1,6 @@
 // Type definitions for Electron IPC API
 import type { SessionListItem, Message } from '@/types/electron';
-import type { ClaudeUsageResponse } from '@/store/app-store';
+import type { ClaudeUsageResponse, CodexUsageResponse } from '@/store/app-store';
 import type {
   IssueValidationVerdict,
   IssueValidationConfidence,
@@ -725,6 +725,9 @@ export interface ElectronAPI {
     }>;
   };
   ideation?: IdeationAPI;
+  codex?: {
+    getUsage: () => Promise<CodexUsageResponse>;
+  };
 }
 
 // Note: Window interface is declared in @/types/electron.d.ts

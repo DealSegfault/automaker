@@ -1073,6 +1073,14 @@ export class HttpApiClient implements ElectronAPI {
       output?: string;
     }> => this.post('/api/setup/auth-claude'),
 
+    deauthClaude: (): Promise<{
+      success: boolean;
+      requiresManualDeauth?: boolean;
+      command?: string;
+      message?: string;
+      error?: string;
+    }> => this.post('/api/setup/deauth-claude'),
+
     storeApiKey: (
       provider: string,
       apiKey: string
@@ -1138,6 +1146,24 @@ export class HttpApiClient implements ElectronAPI {
       loginCommand?: string;
       error?: string;
     }> => this.get('/api/setup/cursor-status'),
+
+    authCursor: (): Promise<{
+      success: boolean;
+      token?: string;
+      requiresManualAuth?: boolean;
+      terminalOpened?: boolean;
+      command?: string;
+      message?: string;
+      output?: string;
+    }> => this.post('/api/setup/auth-cursor'),
+
+    deauthCursor: (): Promise<{
+      success: boolean;
+      requiresManualDeauth?: boolean;
+      command?: string;
+      message?: string;
+      error?: string;
+    }> => this.post('/api/setup/deauth-cursor'),
 
     getCursorConfig: (
       projectPath: string
@@ -1280,6 +1306,14 @@ export class HttpApiClient implements ElectronAPI {
       message?: string;
       output?: string;
     }> => this.post('/api/setup/auth-codex'),
+
+    deauthCodex: (): Promise<{
+      success: boolean;
+      requiresManualDeauth?: boolean;
+      command?: string;
+      message?: string;
+      error?: string;
+    }> => this.post('/api/setup/deauth-codex'),
 
     verifyCodexAuth: (
       authMethod: 'cli' | 'api_key',

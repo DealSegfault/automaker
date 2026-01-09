@@ -5,6 +5,20 @@
 import type { Request, Response } from 'express';
 import { CursorProvider } from '../../../providers/cursor-provider.js';
 import { getErrorMessage, logError } from '../common.js';
+import * as fs from 'fs';
+import * as path from 'path';
+
+const DISCONNECTED_MARKER_FILE = '.cursor-disconnected';
+
+function isCursorDisconnectedFromApp(): boolean {
+  try {
+    const projectRoot = process.cwd();
+    const markerPath = path.join(projectRoot, '.automaker', DISCONNECTED_MARKER_FILE);
+    return fs.existsSync(markerPath);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Creates handler for GET /api/setup/cursor-status
@@ -16,6 +30,30 @@ export function createCursorStatusHandler() {
 
   return async (_req: Request, res: Response): Promise<void> => {
     try {
+      // Check if user has manually disconnected from the app
+      if (isCursorDisconnectedFromApp()) {
+        const provider = new CursorProvider();
+        const [installed, version] = await Promise.all([
+          provider.isInstalled(),
+          provider.getVersion(),
+        ]);
+        const cliPath = installed ? provider.getCliPath() : null;
+
+        res.json({
+          success: true,
+          installed,
+          version: version || null,
+          path: cliPath,
+          auth: {
+            authenticated: false,
+            method: 'none',
+          },
+          installCommand,
+          loginCommand,
+        });
+        return;
+      }
+
       const provider = new CursorProvider();
 
       const [installed, version, auth] = await Promise.all([

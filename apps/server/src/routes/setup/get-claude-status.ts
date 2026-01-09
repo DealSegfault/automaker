@@ -6,8 +6,23 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { getClaudeCliPaths, getClaudeAuthIndicators, systemPathAccess } from '@automaker/platform';
 import { getApiKey } from './common.js';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const execAsync = promisify(exec);
+
+const DISCONNECTED_MARKER_FILE = '.claude-disconnected';
+
+function isDisconnectedFromApp(): boolean {
+  try {
+    // Check if we're in a project directory
+    const projectRoot = process.cwd();
+    const markerPath = path.join(projectRoot, '.automaker', DISCONNECTED_MARKER_FILE);
+    return fs.existsSync(markerPath);
+  } catch {
+    return false;
+  }
+}
 
 export async function getClaudeStatus() {
   let installed = false;
@@ -58,6 +73,30 @@ export async function getClaudeStatus() {
         // Not found at this path
       }
     }
+  }
+
+  // Check if user has manually disconnected from the app
+  if (isDisconnectedFromApp()) {
+    return {
+      status: installed ? 'installed' : 'not_installed',
+      installed,
+      method,
+      version,
+      path: cliPath,
+      auth: {
+        authenticated: false,
+        method: 'none',
+        hasCredentialsFile: false,
+        hasToken: false,
+        hasStoredOAuthToken: false,
+        hasStoredApiKey: false,
+        hasEnvApiKey: false,
+        oauthTokenValid: false,
+        apiKeyValid: false,
+        hasCliAuth: false,
+        hasRecentActivity: false,
+      },
+    };
   }
 
   // Check authentication - detect all possible auth methods

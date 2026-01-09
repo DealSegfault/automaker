@@ -1,9 +1,12 @@
+import { useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { CheckCircle2, AlertCircle, RefreshCw, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { CliStatus } from '../shared/types';
 import type { ClaudeAuthStatus } from '@/store/setup-store';
 import { AnthropicIcon } from '@/components/ui/provider-icon';
+import { getElectronAPI } from '@/lib/electron';
+import { toast } from 'sonner';
 
 interface CliStatusProps {
   status: CliStatus | null;
@@ -81,6 +84,60 @@ function ClaudeCliStatusSkeleton() {
 }
 
 export function ClaudeCliStatus({ status, authStatus, isChecking, onRefresh }: CliStatusProps) {
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [isDeauthenticating, setIsDeauthenticating] = useState(false);
+
+  const handleSignIn = useCallback(async () => {
+    setIsAuthenticating(true);
+    try {
+      const api = getElectronAPI();
+      const result = await api.setup.authClaude();
+
+      if (result.success) {
+        toast.success('Signed In', {
+          description: 'Successfully authenticated Claude CLI',
+        });
+        onRefresh();
+      } else if (result.error) {
+        toast.error('Authentication Failed', {
+          description: result.error,
+        });
+      }
+    } catch (error) {
+      toast.error('Authentication Failed', {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
+    } finally {
+      setIsAuthenticating(false);
+    }
+  }, [onRefresh]);
+
+  const handleSignOut = useCallback(async () => {
+    setIsDeauthenticating(true);
+    try {
+      const api = getElectronAPI();
+      const result = await api.setup.deauthClaude();
+
+      if (result.success) {
+        toast.success('Signed Out', {
+          description: 'Successfully signed out from Claude CLI',
+        });
+        // Refresh status after successful logout
+        onRefresh();
+      } else if (result.error) {
+        toast.error('Sign Out Failed', {
+          description: result.error,
+        });
+      }
+    } catch (error) {
+      toast.error('Sign Out Failed', {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
+    } finally {
+      setIsDeauthenticating(false);
+    }
+  }, [onRefresh]);
+
   if (!status) return <ClaudeCliStatusSkeleton />;
 
   return (
@@ -153,7 +210,7 @@ export function ClaudeCliStatus({ status, authStatus, isChecking, onRefresh }: C
             </div>
             {/* Authentication Status */}
             {authStatus?.authenticated ? (
-              <div className="flex items-center gap-3 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+              <div className="flex items-start gap-3 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
                 <div className="w-10 h-10 rounded-xl bg-emerald-500/15 flex items-center justify-center border border-emerald-500/20 shrink-0">
                   <CheckCircle2 className="w-5 h-5 text-emerald-500" />
                 </div>
@@ -165,6 +222,15 @@ export function ClaudeCliStatus({ status, authStatus, isChecking, onRefresh }: C
                       <span className="font-mono">{getAuthMethodLabel(authStatus.method)}</span>
                     </p>
                   </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSignOut}
+                    disabled={isDeauthenticating}
+                    className="mt-3 h-8 text-xs"
+                  >
+                    {isDeauthenticating ? 'Signing Out...' : 'Sign Out'}
+                  </Button>
                 </div>
               </div>
             ) : (
@@ -175,9 +241,17 @@ export function ClaudeCliStatus({ status, authStatus, isChecking, onRefresh }: C
                 <div className="flex-1">
                   <p className="text-sm font-medium text-amber-400">Not Authenticated</p>
                   <p className="text-xs text-amber-400/70 mt-1">
-                    Run <code className="font-mono bg-amber-500/10 px-1 rounded">claude login</code>{' '}
-                    or set an API key to authenticate.
+                    Click Sign In below to get authentication instructions.
                   </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSignIn}
+                    disabled={isAuthenticating}
+                    className="mt-3 h-8 text-xs"
+                  >
+                    {isAuthenticating ? 'Requesting...' : 'Sign In'}
+                  </Button>
                 </div>
               </div>
             )}

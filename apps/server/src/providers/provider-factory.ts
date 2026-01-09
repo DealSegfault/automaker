@@ -8,6 +8,25 @@
 import { BaseProvider } from './base-provider.js';
 import type { InstallationStatus, ModelDefinition } from './types.js';
 import { isCursorModel, isCodexModel, type ModelProvider } from '@automaker/types';
+import * as fs from 'fs';
+import * as path from 'path';
+
+const DISCONNECTED_MARKERS: Record<string, string> = {
+  claude: '.claude-disconnected',
+  codex: '.codex-disconnected',
+  cursor: '.cursor-disconnected',
+};
+
+/**
+ * Check if a provider CLI is disconnected from the app
+ */
+export function isProviderDisconnected(providerName: string): boolean {
+  const markerFile = DISCONNECTED_MARKERS[providerName.toLowerCase()];
+  if (!markerFile) return false;
+
+  const markerPath = path.join(process.cwd(), '.automaker', markerFile);
+  return fs.existsSync(markerPath);
+}
 
 /**
  * Provider registration entry
@@ -75,10 +94,26 @@ export class ProviderFactory {
    * Get the appropriate provider for a given model ID
    *
    * @param modelId Model identifier (e.g., "claude-opus-4-5-20251101", "cursor-gpt-4o", "cursor-auto")
+   * @param options Optional settings
+   * @param options.throwOnDisconnected Throw error if provider is disconnected (default: true)
    * @returns Provider instance for the model
+   * @throws Error if provider is disconnected and throwOnDisconnected is true
    */
-  static getProviderForModel(modelId: string): BaseProvider {
-    const providerName = this.getProviderNameForModel(modelId);
+  static getProviderForModel(
+    modelId: string,
+    options: { throwOnDisconnected?: boolean } = {}
+  ): BaseProvider {
+    const { throwOnDisconnected = true } = options;
+    const providerName = this.getProviderForModelName(modelId);
+
+    // Check if provider is disconnected
+    if (throwOnDisconnected && isProviderDisconnected(providerName)) {
+      throw new Error(
+        `${providerName.charAt(0).toUpperCase() + providerName.slice(1)} CLI is disconnected from the app. ` +
+          `Please go to Settings > Providers and click "Sign In" to reconnect.`
+      );
+    }
+
     const provider = this.getProviderByName(providerName);
 
     if (!provider) {
@@ -91,6 +126,35 @@ export class ProviderFactory {
     }
 
     return provider;
+  }
+
+  /**
+   * Get the provider name for a given model ID (without creating provider instance)
+   */
+  static getProviderForModelName(modelId: string): string {
+    const lowerModel = modelId.toLowerCase();
+
+    // Get all registered providers sorted by priority (descending)
+    const registrations = Array.from(providerRegistry.entries()).sort(
+      ([, a], [, b]) => (b.priority ?? 0) - (a.priority ?? 0)
+    );
+
+    // Check each provider's canHandleModel function
+    for (const [name, reg] of registrations) {
+      if (reg.canHandleModel?.(lowerModel)) {
+        return name;
+      }
+    }
+
+    // Fallback: Check for explicit prefixes
+    for (const [name] of registrations) {
+      if (lowerModel.startsWith(`${name}-`)) {
+        return name;
+      }
+    }
+
+    // Default to claude (first registered provider or claude)
+    return 'claude';
   }
 
   /**

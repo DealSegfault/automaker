@@ -5,6 +5,20 @@
 import type { Request, Response } from 'express';
 import { CodexProvider } from '../../../providers/codex-provider.js';
 import { getErrorMessage, logError } from '../common.js';
+import * as fs from 'fs';
+import * as path from 'path';
+
+const DISCONNECTED_MARKER_FILE = '.codex-disconnected';
+
+function isCodexDisconnectedFromApp(): boolean {
+  try {
+    const projectRoot = process.cwd();
+    const markerPath = path.join(projectRoot, '.automaker', DISCONNECTED_MARKER_FILE);
+    return fs.existsSync(markerPath);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Creates handler for GET /api/setup/codex-status
@@ -16,6 +30,24 @@ export function createCodexStatusHandler() {
 
   return async (_req: Request, res: Response): Promise<void> => {
     try {
+      // Check if user has manually disconnected from the app
+      if (isCodexDisconnectedFromApp()) {
+        res.json({
+          success: true,
+          installed: true,
+          version: null,
+          path: null,
+          auth: {
+            authenticated: false,
+            method: 'none',
+            hasApiKey: false,
+          },
+          installCommand,
+          loginCommand,
+        });
+        return;
+      }
+
       const provider = new CodexProvider();
       const status = await provider.detectInstallation();
 
