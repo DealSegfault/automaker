@@ -876,7 +876,13 @@ export function PhaseModelSelector({
       className="w-[320px] p-0"
       align={align}
       onWheel={(e) => e.stopPropagation()}
-      onPointerDownOutside={(e) => e.preventDefault()}
+      onPointerDownOutside={(e) => {
+        // Only prevent close if clicking inside a nested popover (thinking level panel)
+        const target = e.target as HTMLElement;
+        if (target.closest('[data-slot="popover-content"]')) {
+          e.preventDefault();
+        }
+      }}
     >
       <Command>
         <CommandInput placeholder="Search models..." />

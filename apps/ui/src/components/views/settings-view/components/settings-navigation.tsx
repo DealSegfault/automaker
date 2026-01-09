@@ -1,8 +1,12 @@
+import { useState, useEffect } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Project } from '@/lib/electron';
 import type { NavigationItem } from '../config/navigation';
 import { GLOBAL_NAV_ITEMS, PROJECT_NAV_ITEMS } from '../config/navigation';
 import type { SettingsViewId } from '../hooks/use-settings-view';
+
+const PROVIDERS_DROPDOWN_KEY = 'settings-providers-dropdown-open';
 
 interface SettingsNavigationProps {
   navItems: NavigationItem[];
@@ -66,29 +70,52 @@ function NavItemWithSubItems({
   activeSection: SettingsViewId;
   onNavigate: (sectionId: SettingsViewId) => void;
 }) {
+  const [isOpen, setIsOpen] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem(PROVIDERS_DROPDOWN_KEY);
+      return stored === null ? true : stored === 'true';
+    }
+    return true;
+  });
+
+  useEffect(() => {
+    localStorage.setItem(PROVIDERS_DROPDOWN_KEY, String(isOpen));
+  }, [isOpen]);
+
   const hasActiveSubItem = item.subItems?.some((subItem) => subItem.id === activeSection) ?? false;
   const isParentActive = item.id === activeSection;
   const Icon = item.icon;
+  const ChevronIcon = isOpen ? ChevronDown : ChevronRight;
 
   return (
     <div>
-      {/* Parent item - non-clickable label */}
-      <div
+      {/* Parent item - clickable to toggle dropdown */}
+      <button
+        onClick={() => setIsOpen(!isOpen)}
         className={cn(
-          'w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground',
-          isParentActive || (hasActiveSubItem && 'text-foreground')
+          'group w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ease-out text-left',
+          'text-muted-foreground hover:text-foreground',
+          'hover:bg-accent/50',
+          'border border-transparent hover:border-border/40',
+          (isParentActive || hasActiveSubItem) && 'text-foreground'
         )}
       >
         <Icon
           className={cn(
             'w-4 h-4 shrink-0 transition-all duration-200',
-            isParentActive || hasActiveSubItem ? 'text-brand-500' : 'text-muted-foreground'
+            isParentActive || hasActiveSubItem ? 'text-brand-500' : 'group-hover:text-brand-400'
           )}
         />
-        <span className="truncate">{item.label}</span>
-      </div>
-      {/* Sub-items - always displayed */}
-      {item.subItems && (
+        <span className="truncate flex-1">{item.label}</span>
+        <ChevronIcon
+          className={cn(
+            'w-4 h-4 shrink-0 transition-transform duration-200',
+            'text-muted-foreground/60 group-hover:text-muted-foreground'
+          )}
+        />
+      </button>
+      {/* Sub-items - conditionally displayed */}
+      {item.subItems && isOpen && (
         <div className="ml-4 mt-1 space-y-1">
           {item.subItems.map((subItem) => {
             const SubIcon = subItem.icon;
