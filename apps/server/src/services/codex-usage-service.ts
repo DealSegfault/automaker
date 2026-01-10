@@ -1,5 +1,3 @@
-import { spawn, type ChildProcess } from 'child_process';
-import readline from 'readline';
 import {
   findCodexCliPath,
   getCodexAuthPath,
@@ -7,6 +5,7 @@ import {
   systemPathReadFile,
 } from '@automaker/platform';
 import { createLogger } from '@automaker/utils';
+import type { CodexAppServerService } from './codex-app-server-service.js';
 
 const logger = createLogger('CodexUsage');
 
@@ -38,35 +37,6 @@ export interface CodexUsageData {
 }
 
 /**
- * JSON-RPC response types from Codex app-server
- */
-interface AppServerAccountResponse {
-  account: {
-    type: 'apiKey' | 'chatgpt';
-    email?: string;
-    planType?: string;
-  } | null;
-  requiresOpenaiAuth: boolean;
-}
-
-interface AppServerRateLimitsResponse {
-  rateLimits: {
-    primary: {
-      usedPercent: number;
-      windowDurationMins: number;
-      resetsAt: number;
-    } | null;
-    secondary: {
-      usedPercent: number;
-      windowDurationMins: number;
-      resetsAt: number;
-    } | null;
-    credits?: unknown;
-    planType?: string; // This is the most accurate/current plan type
-  };
-}
-
-/**
  * Codex Usage Service
  *
  * Fetches usage data from Codex CLI using the app-server JSON-RPC API.
@@ -74,6 +44,7 @@ interface AppServerRateLimitsResponse {
  */
 export class CodexUsageService {
   private cachedCliPath: string | null = null;
+  private appServerService: CodexAppServerService | null = null;
   private accountPlanTypeArray: CodexPlanType[] = [
     'free',
     'plus',
@@ -82,6 +53,11 @@ export class CodexUsageService {
     'enterprise',
     'edu',
   ];
+
+  constructor(appServerService?: CodexAppServerService) {
+    this.appServerService = appServerService || null;
+  }
+
   /**
    * Check if Codex CLI is available on the system
    */
@@ -109,12 +85,9 @@ export class CodexUsageService {
     logger.info(`[fetchUsageData] Using CLI path: ${cliPath}`);
 
     // Try to get usage from Codex app-server (most reliable method)
-    const appServerUsage = await this.fetchFromAppServer(cliPath);
+    const appServerUsage = await this.fetchFromAppServer();
     if (appServerUsage) {
-      logger.info(
-        '[fetchUsageData] Got data from app-server:',
-        JSON.stringify(appServerUsage, null, 2)
-      );
+      logger.info('[fetchUsageData] ✓ Fetched usage from app-server');
       return appServerUsage;
     }
 
@@ -123,7 +96,7 @@ export class CodexUsageService {
     // Fallback: try to parse usage from auth file
     const authUsage = await this.fetchFromAuthFile();
     if (authUsage) {
-      logger.info('[fetchUsageData] Got data from auth file:', JSON.stringify(authUsage, null, 2));
+      logger.info('[fetchUsageData] ✓ Fetched usage from auth file');
       return authUsage;
     }
 
@@ -145,138 +118,22 @@ export class CodexUsageService {
    * Fetch usage data from Codex app-server using JSON-RPC API
    * This is the most reliable method as it gets real-time data from OpenAI
    */
-  private async fetchFromAppServer(cliPath: string): Promise<CodexUsageData | null> {
-    let childProcess: ChildProcess | null = null;
-
+  private async fetchFromAppServer(): Promise<CodexUsageData | null> {
     try {
-      // On Windows, .cmd files must be run through shell
-      const needsShell = process.platform === 'win32' && cliPath.toLowerCase().endsWith('.cmd');
-
-      childProcess = spawn(cliPath, ['app-server'], {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          TERM: 'dumb',
-        },
-        stdio: ['pipe', 'pipe', 'pipe'],
-        shell: needsShell,
-      });
-
-      if (!childProcess.stdin || !childProcess.stdout) {
-        throw new Error('Failed to create stdio pipes');
+      // Use CodexAppServerService if available
+      if (!this.appServerService) {
+        return null;
       }
 
-      // Setup readline for reading JSONL responses
-      const rl = readline.createInterface({
-        input: childProcess.stdout,
-        crlfDelay: Infinity,
-      });
+      // Fetch account and rate limits in parallel
+      const [accountResult, rateLimitsResult] = await Promise.all([
+        this.appServerService.getAccount(),
+        this.appServerService.getRateLimits(),
+      ]);
 
-      // Message ID counter for JSON-RPC
-      let messageId = 0;
-      const pendingRequests = new Map<
-        number,
-        {
-          resolve: (value: unknown) => void;
-          reject: (error: Error) => void;
-          timeout: NodeJS.Timeout;
-        }
-      >();
-
-      // Process incoming messages
-      rl.on('line', (line) => {
-        if (!line.trim()) return;
-
-        try {
-          const message = JSON.parse(line);
-
-          // Handle response to our request
-          if ('id' in message && message.id !== undefined) {
-            const pending = pendingRequests.get(message.id);
-            if (pending) {
-              clearTimeout(pending.timeout);
-              pendingRequests.delete(message.id);
-              if (message.error) {
-                pending.reject(new Error(message.error.message || 'Unknown error'));
-              } else {
-                pending.resolve(message.result);
-              }
-            }
-          }
-          // Ignore notifications (no id field)
-        } catch {
-          // Ignore parse errors for non-JSON lines
-        }
-      });
-
-      // Helper to send JSON-RPC request and wait for response
-      const sendRequest = <T>(method: string, params?: unknown): Promise<T> => {
-        return new Promise((resolve, reject) => {
-          const id = ++messageId;
-          const request = params ? { method, id, params } : { method, id };
-
-          // Set timeout for request
-          const timeout = setTimeout(() => {
-            pendingRequests.delete(id);
-            reject(new Error(`Request timeout: ${method}`));
-          }, 10000);
-
-          pendingRequests.set(id, {
-            resolve: resolve as (value: unknown) => void,
-            reject,
-            timeout,
-          });
-
-          childProcess!.stdin!.write(JSON.stringify(request) + '\n');
-        });
-      };
-
-      // Helper to send notification (no response expected)
-      const sendNotification = (method: string, params?: unknown): void => {
-        const notification = params ? { method, params } : { method };
-        childProcess!.stdin!.write(JSON.stringify(notification) + '\n');
-      };
-
-      // 1. Initialize the app-server
-      logger.info('[fetchFromAppServer] Sending initialize request...');
-      const initResult = await sendRequest('initialize', {
-        clientInfo: {
-          name: 'automaker',
-          title: 'AutoMaker',
-          version: '1.0.0',
-        },
-      });
-      logger.info('[fetchFromAppServer] Initialize result:', JSON.stringify(initResult, null, 2));
-
-      // 2. Send initialized notification
-      sendNotification('initialized');
-      logger.info('[fetchFromAppServer] Sent initialized notification');
-
-      // 3. Get account info (includes plan type)
-      logger.info('[fetchFromAppServer] Requesting account/read...');
-      const accountResult = await sendRequest<AppServerAccountResponse>('account/read', {
-        refreshToken: false,
-      });
-      logger.info('[fetchFromAppServer] Account result:', JSON.stringify(accountResult, null, 2));
-
-      // 4. Get rate limits
-      let rateLimitsResult: AppServerRateLimitsResponse | null = null;
-      try {
-        logger.info('[fetchFromAppServer] Requesting account/rateLimits/read...');
-        rateLimitsResult =
-          await sendRequest<AppServerRateLimitsResponse>('account/rateLimits/read');
-        logger.info(
-          '[fetchFromAppServer] Rate limits result:',
-          JSON.stringify(rateLimitsResult, null, 2)
-        );
-      } catch (rateLimitError) {
-        // Rate limits may not be available for API key auth
-        logger.info('[fetchFromAppServer] Rate limits not available:', rateLimitError);
+      if (!accountResult) {
+        return null;
       }
-
-      // Clean up
-      rl.close();
-      childProcess.kill('SIGTERM');
 
       // Build response
       // Prefer planType from rateLimits (more accurate/current) over account (can be stale)
@@ -286,9 +143,6 @@ export class CodexUsageService {
       const rateLimitsPlanType = rateLimitsResult?.rateLimits?.planType;
       if (rateLimitsPlanType) {
         const normalizedType = rateLimitsPlanType.toLowerCase() as CodexPlanType;
-        logger.info(
-          `[fetchFromAppServer] Rate limits planType: "${rateLimitsPlanType}", normalized: "${normalizedType}"`
-        );
         if (this.accountPlanTypeArray.includes(normalizedType)) {
           planType = normalizedType;
         }
@@ -297,18 +151,9 @@ export class CodexUsageService {
       // Fall back to account planType if rate limits didn't have it
       if (planType === 'unknown' && accountResult.account?.planType) {
         const normalizedType = accountResult.account.planType.toLowerCase() as CodexPlanType;
-        logger.info(
-          `[fetchFromAppServer] Fallback to account planType: "${accountResult.account.planType}", normalized: "${normalizedType}"`
-        );
         if (this.accountPlanTypeArray.includes(normalizedType)) {
           planType = normalizedType;
         }
-      }
-
-      if (planType === 'unknown') {
-        logger.info('[fetchFromAppServer] No planType found in either response');
-      } else {
-        logger.info(`[fetchFromAppServer] Final planType: ${planType}`);
       }
 
       const result: CodexUsageData = {
@@ -325,10 +170,6 @@ export class CodexUsageService {
       // Add rate limit info if available
       if (rateLimitsResult?.rateLimits?.primary) {
         const primary = rateLimitsResult.rateLimits.primary;
-        logger.info(
-          '[fetchFromAppServer] Adding primary rate limit:',
-          JSON.stringify(primary, null, 2)
-        );
         result.rateLimits!.primary = {
           limit: 100, // Not provided by API, using placeholder
           used: primary.usedPercent,
@@ -337,17 +178,11 @@ export class CodexUsageService {
           windowDurationMins: primary.windowDurationMins,
           resetsAt: primary.resetsAt,
         };
-      } else {
-        logger.info('[fetchFromAppServer] No primary rate limit in result');
       }
 
       // Add secondary rate limit if available
       if (rateLimitsResult?.rateLimits?.secondary) {
         const secondary = rateLimitsResult.rateLimits.secondary;
-        logger.info(
-          '[fetchFromAppServer] Adding secondary rate limit:',
-          JSON.stringify(secondary, null, 2)
-        );
         result.rateLimits!.secondary = {
           limit: 100,
           used: secondary.usedPercent,
@@ -358,17 +193,13 @@ export class CodexUsageService {
         };
       }
 
-      logger.info('[fetchFromAppServer] Final result:', JSON.stringify(result, null, 2));
+      logger.info(
+        `[fetchFromAppServer] ✓ Plan: ${planType}, Primary: ${result.rateLimits?.primary?.usedPercent || 'N/A'}%, Secondary: ${result.rateLimits?.secondary?.usedPercent || 'N/A'}%`
+      );
       return result;
     } catch (error) {
-      // App-server method failed, will fall back to other methods
-      logger.error('Failed to fetch from app-server:', error);
+      logger.error('[fetchFromAppServer] Failed:', error);
       return null;
-    } finally {
-      // Ensure process is killed
-      if (childProcess && !childProcess.killed) {
-        childProcess.kill('SIGTERM');
-      }
     }
   }
 
@@ -383,7 +214,7 @@ export class CodexUsageService {
       const exists = systemPathExists(authFilePath);
 
       if (!exists) {
-        logger.info('[getPlanTypeFromAuthFile] Auth file does not exist');
+        logger.warn('[getPlanTypeFromAuthFile] Auth file does not exist');
         return 'unknown';
       }
 

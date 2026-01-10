@@ -727,6 +727,20 @@ export interface ElectronAPI {
   ideation?: IdeationAPI;
   codex?: {
     getUsage: () => Promise<CodexUsageResponse>;
+    getModels: (refresh?: boolean) => Promise<{
+      success: boolean;
+      models?: Array<{
+        id: string;
+        label: string;
+        description: string;
+        hasThinking: boolean;
+        supportsVision: boolean;
+        tier: 'premium' | 'standard' | 'basic';
+        isDefault: boolean;
+      }>;
+      cachedAt?: number;
+      error?: string;
+    }>;
   };
   settings?: {
     getStatus: () => Promise<{

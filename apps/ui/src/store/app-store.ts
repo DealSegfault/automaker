@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 // Note: persist middleware removed - settings now sync via API (use-settings-sync.ts)
 import type { Project, TrashedProject } from '@/lib/electron';
+import { getElectronAPI } from '@/lib/electron';
 import { createLogger } from '@automaker/utils/logger';
 import { setItem, getItem } from '@/lib/storage';
 import type {
@@ -652,6 +653,20 @@ export interface AppState {
   codexUsage: CodexUsage | null;
   codexUsageLastUpdated: number | null;
 
+  // Codex Models (dynamically fetched)
+  codexModels: Array<{
+    id: string;
+    label: string;
+    description: string;
+    hasThinking: boolean;
+    supportsVision: boolean;
+    tier: 'premium' | 'standard' | 'basic';
+    isDefault: boolean;
+  }>;
+  codexModelsLoading: boolean;
+  codexModelsError: string | null;
+  codexModelsLastFetched: number | null;
+
   // Pipeline Configuration (per-project, keyed by project path)
   pipelineConfigByProject: Record<string, PipelineConfig>;
 
@@ -1093,6 +1108,20 @@ export interface AppActions {
   // Codex Usage Tracking actions
   setCodexUsage: (usage: CodexUsage | null) => void;
 
+  // Codex Models actions
+  fetchCodexModels: (forceRefresh?: boolean) => Promise<void>;
+  setCodexModels: (
+    models: Array<{
+      id: string;
+      label: string;
+      description: string;
+      hasThinking: boolean;
+      supportsVision: boolean;
+      tier: 'premium' | 'standard' | 'basic';
+      isDefault: boolean;
+    }>
+  ) => void;
+
   // Reset
   reset: () => void;
 }
@@ -1233,6 +1262,10 @@ const initialState: AppState = {
   claudeUsageLastUpdated: null,
   codexUsage: null,
   codexUsageLastUpdated: null,
+  codexModels: [],
+  codexModelsLoading: false,
+  codexModelsError: null,
+  codexModelsLastFetched: null,
   pipelineConfigByProject: {},
   // UI State (previously in localStorage, now synced via API)
   worktreePanelCollapsed: false,
@@ -3014,6 +3047,53 @@ export const useAppStore = create<AppState & AppActions>()((set, get) => ({
     set({
       codexUsage: usage,
       codexUsageLastUpdated: usage ? Date.now() : null,
+    }),
+
+  // Codex Models actions
+  fetchCodexModels: async (forceRefresh = false) => {
+    const { codexModelsLastFetched, codexModelsLoading } = get();
+
+    // Skip if already loading
+    if (codexModelsLoading) return;
+
+    // Skip if recently fetched (< 5 minutes ago) and not forcing refresh
+    if (!forceRefresh && codexModelsLastFetched && Date.now() - codexModelsLastFetched < 300000) {
+      return;
+    }
+
+    set({ codexModelsLoading: true, codexModelsError: null });
+
+    try {
+      const api = getElectronAPI();
+      if (!api.codex) {
+        throw new Error('Codex API not available');
+      }
+
+      const result = await api.codex.getModels(forceRefresh);
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to fetch Codex models');
+      }
+
+      set({
+        codexModels: result.models || [],
+        codexModelsLastFetched: Date.now(),
+        codexModelsLoading: false,
+        codexModelsError: null,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      set({
+        codexModelsError: errorMessage,
+        codexModelsLoading: false,
+      });
+    }
+  },
+
+  setCodexModels: (models) =>
+    set({
+      codexModels: models,
+      codexModelsLastFetched: Date.now(),
     }),
 
   // Pipeline actions

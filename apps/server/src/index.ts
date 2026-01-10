@@ -55,6 +55,8 @@ import { createClaudeRoutes } from './routes/claude/index.js';
 import { ClaudeUsageService } from './services/claude-usage-service.js';
 import { createCodexRoutes } from './routes/codex/index.js';
 import { CodexUsageService } from './services/codex-usage-service.js';
+import { CodexAppServerService } from './services/codex-app-server-service.js';
+import { CodexModelCacheService } from './services/codex-model-cache-service.js';
 import { createGitHubRoutes } from './routes/github/index.js';
 import { createContextRoutes } from './routes/context/index.js';
 import { createBacklogPlanRoutes } from './routes/backlog-plan/index.js';
@@ -168,7 +170,9 @@ const agentService = new AgentService(DATA_DIR, events, settingsService);
 const featureLoader = new FeatureLoader();
 const autoModeService = new AutoModeService(events, settingsService);
 const claudeUsageService = new ClaudeUsageService();
-const codexUsageService = new CodexUsageService();
+const codexAppServerService = new CodexAppServerService();
+const codexModelCacheService = new CodexModelCacheService(DATA_DIR, codexAppServerService);
+const codexUsageService = new CodexUsageService(codexAppServerService);
 const mcpTestService = new MCPTestService(settingsService);
 const ideationService = new IdeationService(events, settingsService, featureLoader);
 
@@ -176,6 +180,11 @@ const ideationService = new IdeationService(events, settingsService, featureLoad
 (async () => {
   await agentService.initialize();
   logger.info('Agent service initialized');
+
+  // Bootstrap Codex model cache in background (don't block server startup)
+  void codexModelCacheService.getModels().catch((err) => {
+    logger.error('Failed to bootstrap Codex model cache:', err);
+  });
 })();
 
 // Run stale validation cleanup every hour to prevent memory leaks from crashed validations
@@ -219,7 +228,7 @@ app.use('/api/templates', createTemplatesRoutes());
 app.use('/api/terminal', createTerminalRoutes());
 app.use('/api/settings', createSettingsRoutes(settingsService));
 app.use('/api/claude', createClaudeRoutes(claudeUsageService));
-app.use('/api/codex', createCodexRoutes(codexUsageService));
+app.use('/api/codex', createCodexRoutes(codexUsageService, codexModelCacheService));
 app.use('/api/github', createGitHubRoutes(events, settingsService));
 app.use('/api/context', createContextRoutes(settingsService));
 app.use('/api/backlog-plan', createBacklogPlanRoutes(events, settingsService));

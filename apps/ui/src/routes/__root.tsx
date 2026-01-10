@@ -68,8 +68,9 @@ function RootLayoutContent() {
     getEffectiveTheme,
     skipSandboxWarning,
     setSkipSandboxWarning,
+    fetchCodexModels,
   } = useAppStore();
-  const { setupComplete } = useSetupStore();
+  const { setupComplete, codexCliStatus } = useSetupStore();
   const navigate = useNavigate();
   const [isMounted, setIsMounted] = useState(false);
   const [streamerPanelOpen, setStreamerPanelOpen] = useState(false);
@@ -430,6 +431,20 @@ function RootLayoutContent() {
       navigate({ to: '/board' });
     }
   }, [isMounted, currentProject, location.pathname, navigate]);
+
+  // Bootstrap Codex models on app startup (after auth completes)
+  useEffect(() => {
+    // Only fetch if authenticated and Codex CLI is available
+    if (!authChecked || !isAuthenticated) return;
+
+    const isCodexAvailable = codexCliStatus?.installed && codexCliStatus?.auth?.authenticated;
+    if (!isCodexAvailable) return;
+
+    // Fetch models in the background
+    fetchCodexModels().catch((error) => {
+      logger.warn('Failed to bootstrap Codex models:', error);
+    });
+  }, [authChecked, isAuthenticated, codexCliStatus, fetchCodexModels]);
 
   // Apply theme class to document - use deferred value to avoid blocking UI
   useEffect(() => {

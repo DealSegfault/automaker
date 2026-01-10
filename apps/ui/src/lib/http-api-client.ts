@@ -2056,6 +2056,25 @@ export class HttpApiClient implements ElectronAPI {
   // Codex API
   codex = {
     getUsage: (): Promise<CodexUsageResponse> => this.get('/api/codex/usage'),
+    getModels: (
+      refresh = false
+    ): Promise<{
+      success: boolean;
+      models?: Array<{
+        id: string;
+        label: string;
+        description: string;
+        hasThinking: boolean;
+        supportsVision: boolean;
+        tier: 'premium' | 'standard' | 'basic';
+        isDefault: boolean;
+      }>;
+      cachedAt?: number;
+      error?: string;
+    }> => {
+      const url = `/api/codex/models${refresh ? '?refresh=true' : ''}`;
+      return this.get(url);
+    },
   };
 
   // Context API
