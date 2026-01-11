@@ -39,6 +39,7 @@ import type { WorktreeAPI, GitAPI, ModelDefinition, ProviderStatus } from '@/typ
 import { getGlobalFileBrowser } from '@/contexts/file-browser-context';
 
 const logger = createLogger('HttpClient');
+const NO_STORE_CACHE_MODE: RequestCache = 'no-store';
 
 // Cached server URL (set during initialization in Electron mode)
 let cachedServerUrl: string | null = null;
@@ -69,6 +70,7 @@ const handleUnauthorized = (): void => {
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
     body: '{}',
+    cache: NO_STORE_CACHE_MODE,
   }).catch(() => {});
   notifyLoggedOut();
 };
@@ -296,6 +298,7 @@ export const checkAuthStatus = async (): Promise<{
     const response = await fetch(`${getServerUrl()}/api/auth/status`, {
       credentials: 'include',
       headers: getApiKey() ? { 'X-API-Key': getApiKey()! } : undefined,
+      cache: NO_STORE_CACHE_MODE,
     });
     const data = await response.json();
     return {
@@ -322,6 +325,7 @@ export const login = async (
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({ apiKey }),
+      cache: NO_STORE_CACHE_MODE,
     });
     const data = await response.json();
 
@@ -361,6 +365,7 @@ export const fetchSessionToken = async (): Promise<boolean> => {
   try {
     const response = await fetch(`${getServerUrl()}/api/auth/status`, {
       credentials: 'include', // Send the session cookie
+      cache: NO_STORE_CACHE_MODE,
     });
 
     if (!response.ok) {
@@ -391,6 +396,7 @@ export const logout = async (): Promise<{ success: boolean }> => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
+      cache: NO_STORE_CACHE_MODE,
     });
 
     // Clear the cached session token
@@ -439,6 +445,7 @@ export const verifySession = async (): Promise<boolean> => {
   const response = await fetch(`${getServerUrl()}/api/settings/status`, {
     headers,
     credentials: 'include',
+    cache: NO_STORE_CACHE_MODE,
     // Avoid hanging indefinitely during backend reloads or network issues
     signal: AbortSignal.timeout(2500),
   });
@@ -475,6 +482,7 @@ export const checkSandboxEnvironment = async (): Promise<{
   try {
     const response = await fetch(`${getServerUrl()}/api/health/environment`, {
       method: 'GET',
+      cache: NO_STORE_CACHE_MODE,
       signal: AbortSignal.timeout(5000),
     });
 
@@ -556,6 +564,7 @@ export class HttpApiClient implements ElectronAPI {
       const response = await fetch(`${this.serverUrl}/api/auth/token`, {
         headers,
         credentials: 'include',
+        cache: NO_STORE_CACHE_MODE,
       });
 
       if (response.status === 401 || response.status === 403) {
@@ -587,6 +596,17 @@ export class HttpApiClient implements ElectronAPI {
 
     this.isConnecting = true;
 
+    // Wait for API key initialization to complete before attempting connection
+    // This prevents race conditions during app startup
+    waitForApiKeyInit()
+      .then(() => this.doConnectWebSocketInternal())
+      .catch((error) => {
+        logger.error('Failed to initialize for WebSocket connection:', error);
+        this.isConnecting = false;
+      });
+  }
+
+  private doConnectWebSocketInternal(): void {
     // Electron mode typically authenticates with the injected API key.
     // However, in external-server/cookie-auth flows, the API key may be unavailable.
     // In that case, fall back to the same wsToken/cookie authentication used in web mode
@@ -771,6 +791,7 @@ export class HttpApiClient implements ElectronAPI {
     const response = await fetch(`${this.serverUrl}${endpoint}`, {
       headers: this.getHeaders(),
       credentials: 'include', // Include cookies for session auth
+      cache: NO_STORE_CACHE_MODE,
     });
 
     if (response.status === 401 || response.status === 403) {
