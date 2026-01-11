@@ -19,6 +19,7 @@ import {
   AnthropicIcon,
   MistralIcon,
   MetaIcon,
+  getProviderIconForModel,
 } from '@/components/ui/provider-icon';
 import type { ComponentType } from 'react';
 
@@ -31,27 +32,10 @@ interface OpencodeModelConfigurationProps {
 }
 
 /**
- * Returns the appropriate icon component for a given OpenCode provider
+ * Returns the appropriate icon component for a given OpenCode model ID
  */
-function getProviderIcon(provider: OpencodeProvider): ComponentType<{ className?: string }> {
-  switch (provider) {
-    case 'opencode':
-      return OpenCodeIcon;
-    case 'amazon-bedrock-anthropic':
-      return AnthropicIcon;
-    case 'amazon-bedrock-deepseek':
-      return DeepSeekIcon;
-    case 'amazon-bedrock-amazon':
-      return NovaIcon;
-    case 'amazon-bedrock-meta':
-      return MetaIcon;
-    case 'amazon-bedrock-mistral':
-      return MistralIcon;
-    case 'amazon-bedrock-qwen':
-      return QwenIcon;
-    default:
-      return OpenCodeIcon;
-  }
+function getModelIcon(modelId: OpencodeModelId): ComponentType<{ className?: string }> {
+  return getProviderIconForModel(modelId);
 }
 
 /**
@@ -146,11 +130,11 @@ export function OpencodeModelConfiguration({
               {enabledOpencodeModels.map((modelId) => {
                 const model = OPENCODE_MODEL_CONFIG_MAP[modelId];
                 if (!model) return null;
-                const ProviderIconComponent = getProviderIcon(model.provider);
+                const ModelIconComponent = getModelIcon(modelId);
                 return (
                   <SelectItem key={modelId} value={modelId}>
                     <div className="flex items-center gap-2">
-                      <ProviderIconComponent className="w-4 h-4" />
+                      <ModelIconComponent className="w-4 h-4" />
                       <span>{model.label}</span>
                     </div>
                   </SelectItem>
@@ -167,7 +151,9 @@ export function OpencodeModelConfiguration({
             const models = modelsByProvider[provider];
             if (!models || models.length === 0) return null;
 
-            const ProviderIconComponent = getProviderIcon(provider);
+            // Use the first model's icon as the provider icon
+            const ProviderIconComponent =
+              models.length > 0 ? getModelIcon(models[0].id) : OpenCodeIcon;
 
             return (
               <div key={provider} className="space-y-2">

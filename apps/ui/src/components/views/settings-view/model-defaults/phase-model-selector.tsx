@@ -37,6 +37,7 @@ import {
   QwenIcon,
   MistralIcon,
   MetaIcon,
+  getProviderIconForModel,
 } from '@/components/ui/provider-icon';
 import { Button } from '@/components/ui/button';
 import {
@@ -513,27 +514,8 @@ export function PhaseModelSelector({
     const isSelected = selectedModel === model.id;
     const isFavorite = favoriteModels.includes(model.id);
 
-    // Get the appropriate icon based on provider
-    const ProviderIcon = (() => {
-      switch (model.provider) {
-        case 'opencode':
-          return OpenCodeIcon;
-        case 'amazon-bedrock-anthropic':
-          return AnthropicIcon;
-        case 'amazon-bedrock-deepseek':
-          return DeepSeekIcon;
-        case 'amazon-bedrock-amazon':
-          return NovaIcon;
-        case 'amazon-bedrock-meta':
-          return MetaIcon;
-        case 'amazon-bedrock-mistral':
-          return MistralIcon;
-        case 'amazon-bedrock-qwen':
-          return QwenIcon;
-        default:
-          return OpenCodeIcon;
-      }
-    })();
+    // Get the appropriate icon based on the specific model ID
+    const ProviderIcon = getProviderIconForModel(model.id);
 
     return (
       <CommandItem
