@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button';
 import { PathInput } from '@/components/ui/path-input';
 import { Kbd, KbdGroup } from '@/components/ui/kbd';
 import { getDefaultWorkspaceDirectory, saveLastProjectDirectory } from '@/lib/workspace-config';
-import { useOSDetection } from '@/hooks';
+import { isMac } from '@/lib/utils';
 import { apiPost } from '@/lib/api-fetch';
 import { useAppStore } from '@/store/app-store';
 
@@ -50,7 +50,6 @@ export function FileBrowserDialog({
   description = 'Navigate to your project folder or paste a path directly',
   initialPath,
 }: FileBrowserDialogProps) {
-  const { isMac } = useOSDetection();
   const [currentPath, setCurrentPath] = useState<string>('');
   const [parentPath, setParentPath] = useState<string | null>(null);
   const [directories, setDirectories] = useState<DirectoryEntry[]>([]);
@@ -227,12 +226,6 @@ export function FileBrowserDialog({
             error={!!error}
             onNavigate={handleNavigate}
             onHome={handleGoHome}
-            entries={directories.map((dir) => ({ ...dir, isDirectory: true }))}
-            onSelectEntry={(entry) => {
-              if (entry.isDirectory) {
-                handleSelectDirectory(entry);
-              }
-            }}
           />
 
           {/* Recent folders */}
