@@ -4,21 +4,28 @@ export type SettingsViewId =
   | 'api-keys'
   | 'ai-provider'
   | 'claude'
+  | 'providers'
+  | 'claude-provider'
+  | 'cursor-provider'
+  | 'codex-provider'
+  | 'opencode-provider'
   | 'mcp-servers'
   | 'prompts'
-  | 'ai-enhancement'
+  | 'model-defaults'
   | 'appearance'
   | 'terminal'
   | 'keyboard'
   | 'audio'
   | 'defaults'
+  | 'account'
+  | 'security'
   | 'danger';
 
 interface UseSettingsViewOptions {
   initialView?: SettingsViewId;
 }
 
-export function useSettingsView({ initialView = 'api-keys' }: UseSettingsViewOptions = {}) {
+export function useSettingsView({ initialView = 'model-defaults' }: UseSettingsViewOptions = {}) {
   const [activeView, setActiveView] = useState<SettingsViewId>(initialView);
 
   const navigateTo = useCallback((viewId: SettingsViewId) => {

@@ -1,862 +1,666 @@
 /**
- * OpenCode Provider - Executes queries using opencode CLI (JSON streaming)
+ * OpenCode Provider - Executes queries using opencode CLI
  *
- * Spawns `opencode run --format json` and streams JSONL events into ProviderMessage.
+ * Extends CliProvider with OpenCode-specific configuration:
+ * - Event normalization for OpenCode's stream-json format
+ * - Model definitions for anthropic, openai, and google models
+ * - NPX-based Windows execution strategy
+ * - Platform-specific npm global installation paths
+ *
+ * Spawns the opencode CLI with --output-format stream-json for streaming responses.
  */
 
-import { spawn } from 'child_process';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import os from 'os';
-import path from 'path';
-import fs from 'fs/promises';
-import { BaseProvider } from './base-provider.js';
-import { createLogger } from '@automaker/utils';
+import * as path from 'path';
+import * as os from 'os';
+import { CliProvider, type CliSpawnConfig } from './cli-provider.js';
 import type {
+  ProviderConfig,
   ExecuteOptions,
   ProviderMessage,
-  InstallationStatus,
   ModelDefinition,
+  InstallationStatus,
   ContentBlock,
-} from './types.js';
+} from '@automaker/types';
+import { stripProviderPrefix } from '@automaker/types';
+import { type SubprocessOptions, getOpenCodeAuthIndicators } from '@automaker/platform';
 
-const execAsync = promisify(exec);
-const logger = createLogger('OpenCodeProvider');
+// =============================================================================
+// OpenCode Auth Types
+// =============================================================================
 
-export class OpenCodeProvider extends BaseProvider {
+export interface OpenCodeAuthStatus {
+  authenticated: boolean;
+  method: 'api_key' | 'oauth' | 'none';
+  hasOAuthToken?: boolean;
+  hasApiKey?: boolean;
+}
+
+// =============================================================================
+// OpenCode Stream Event Types
+// =============================================================================
+
+/**
+ * Base interface for all OpenCode stream events
+ */
+interface OpenCodeBaseEvent {
+  /** Event type identifier */
+  type: string;
+  /** Optional session identifier */
+  session_id?: string;
+}
+
+/**
+ * Text delta event - Incremental text output from the model
+ */
+export interface OpenCodeTextDeltaEvent extends OpenCodeBaseEvent {
+  type: 'text-delta';
+  /** The incremental text content */
+  text: string;
+}
+
+/**
+ * Text end event - Signals completion of text generation
+ */
+export interface OpenCodeTextEndEvent extends OpenCodeBaseEvent {
+  type: 'text-end';
+}
+
+/**
+ * Tool call event - Request to execute a tool
+ */
+export interface OpenCodeToolCallEvent extends OpenCodeBaseEvent {
+  type: 'tool-call';
+  /** Unique identifier for this tool call */
+  call_id?: string;
+  /** Tool name to invoke */
+  name: string;
+  /** Arguments to pass to the tool */
+  args: unknown;
+}
+
+/**
+ * Tool result event - Output from a tool execution
+ */
+export interface OpenCodeToolResultEvent extends OpenCodeBaseEvent {
+  type: 'tool-result';
+  /** The tool call ID this result corresponds to */
+  call_id?: string;
+  /** Output from the tool execution */
+  output: string;
+}
+
+/**
+ * Tool error event - Tool execution failed
+ */
+export interface OpenCodeToolErrorEvent extends OpenCodeBaseEvent {
+  type: 'tool-error';
+  /** The tool call ID that failed */
+  call_id?: string;
+  /** Error message describing the failure */
+  error: string;
+}
+
+/**
+ * Start step event - Begins an agentic loop iteration
+ */
+export interface OpenCodeStartStepEvent extends OpenCodeBaseEvent {
+  type: 'start-step';
+  /** Step number in the agentic loop */
+  step?: number;
+}
+
+/**
+ * Finish step event - Completes an agentic loop iteration
+ */
+export interface OpenCodeFinishStepEvent extends OpenCodeBaseEvent {
+  type: 'finish-step';
+  /** Step number that completed */
+  step?: number;
+  /** Whether the step completed successfully */
+  success?: boolean;
+  /** Optional result data */
+  result?: string;
+  /** Optional error if step failed */
+  error?: string;
+}
+
+/**
+ * Union type of all OpenCode stream events
+ */
+export type OpenCodeStreamEvent =
+  | OpenCodeTextDeltaEvent
+  | OpenCodeTextEndEvent
+  | OpenCodeToolCallEvent
+  | OpenCodeToolResultEvent
+  | OpenCodeToolErrorEvent
+  | OpenCodeStartStepEvent
+  | OpenCodeFinishStepEvent;
+
+// =============================================================================
+// Tool Use ID Generation
+// =============================================================================
+
+/** Counter for generating unique tool use IDs when call_id is not provided */
+let toolUseIdCounter = 0;
+
+/**
+ * Generate a unique tool use ID for tool calls without explicit IDs
+ */
+function generateToolUseId(): string {
+  toolUseIdCounter += 1;
+  return `opencode-tool-${toolUseIdCounter}`;
+}
+
+/**
+ * Reset the tool use ID counter (useful for testing)
+ */
+export function resetToolUseIdCounter(): void {
+  toolUseIdCounter = 0;
+}
+
+// =============================================================================
+// Provider Implementation
+// =============================================================================
+
+/**
+ * OpencodeProvider - Integrates opencode CLI as an AI provider
+ *
+ * OpenCode is an npm-distributed CLI tool that provides access to
+ * multiple AI model providers through a unified interface.
+ */
+export class OpencodeProvider extends CliProvider {
+  constructor(config: ProviderConfig = {}) {
+    super(config);
+  }
+
+  // ==========================================================================
+  // CliProvider Abstract Method Implementations
+  // ==========================================================================
+
   getName(): string {
     return 'opencode';
   }
 
-  /**
-   * Execute a query using OpenCode CLI streaming output
-   */
-  async *executeQuery(options: ExecuteOptions): AsyncGenerator<ProviderMessage> {
-    const {
-      prompt,
-      model,
-      cwd,
-      systemPrompt,
-      abortController,
-      sdkSessionId,
-      allowedTools,
-      maxTurns,
-    } = options;
+  getCliName(): string {
+    return 'opencode';
+  }
 
-    const requestedModel = model || 'glm4.7';
-    const effectiveModel = this.mapModelToOpenCodeFormat(requestedModel);
-    const promptText = this.buildPrompt(prompt, systemPrompt);
-
-    logger.info(`Executing opencode run with model: ${effectiveModel} in ${cwd}`);
-
-    const cliPath = await this.resolveCliPath();
-    if (!cliPath) {
-      yield {
-        type: 'error',
-        error: 'OpenCode CLI not found. Please install opencode and ensure it is in PATH.',
-      };
-      return;
-    }
-
-    const args = ['run', '--format', 'json', '--model', effectiveModel];
-    if (sdkSessionId) {
-      args.push('--session', sdkSessionId);
-    }
-    if (promptText.trim().length > 0) {
-      args.push(promptText);
-    }
-
-    let tempConfig: {
-      path: string;
-      cleanup: () => Promise<void>;
-    } | null = null;
-    try {
-      tempConfig = await this.createTempConfig(cwd, allowedTools, maxTurns);
-    } catch (error) {
-      logger.warn('Failed to prepare OpenCode config override', {
-        error: this.formatExecutionError(error),
-      });
-    }
-
-    const childProcess = spawn(cliPath, args, {
-      cwd,
-      env: {
-        ...process.env,
-        ...this.config.env,
-        ...(tempConfig ? { OPENCODE_CONFIG: tempConfig.path } : {}),
+  getSpawnConfig(): CliSpawnConfig {
+    return {
+      windowsStrategy: 'npx',
+      npxPackage: 'opencode-ai@latest',
+      commonPaths: {
+        linux: [
+          path.join(os.homedir(), '.opencode/bin/opencode'),
+          path.join(os.homedir(), '.npm-global/bin/opencode'),
+          '/usr/local/bin/opencode',
+          '/usr/bin/opencode',
+          path.join(os.homedir(), '.local/bin/opencode'),
+        ],
+        darwin: [
+          path.join(os.homedir(), '.opencode/bin/opencode'),
+          path.join(os.homedir(), '.npm-global/bin/opencode'),
+          '/usr/local/bin/opencode',
+          '/opt/homebrew/bin/opencode',
+          path.join(os.homedir(), '.local/bin/opencode'),
+        ],
+        win32: [
+          path.join(os.homedir(), '.opencode', 'bin', 'opencode.exe'),
+          path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'opencode.cmd'),
+          path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'opencode'),
+          path.join(process.env.APPDATA || '', 'npm', 'opencode.cmd'),
+        ],
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    };
+  }
 
-    let spawnError: Error | null = null;
-    childProcess.on('error', (err) => {
-      spawnError = err;
-    });
+  /**
+   * Build CLI arguments for the `opencode run` command
+   *
+   * Arguments built:
+   * - 'run' subcommand for executing queries
+   * - '--format', 'stream-json' for JSONL streaming output
+   * - '-q' / '--quiet' to suppress spinner and interactive elements
+   * - '-c', '<cwd>' for working directory
+   * - '--model', '<model>' for model selection (if specified)
+   * - '-' as final arg to read prompt from stdin
+   *
+   * The prompt is NOT included in CLI args - it's passed via stdin to avoid
+   * shell escaping issues with special characters in content.
+   *
+   * @param options - Execution options containing model, cwd, etc.
+   * @returns Array of CLI arguments for opencode run
+   */
+  buildCliArgs(options: ExecuteOptions): string[] {
+    const args: string[] = ['run'];
 
-    let abortRequested = abortController?.signal.aborted ?? false;
+    // Add streaming JSON output format for JSONL parsing
+    args.push('--format', 'stream-json');
 
-    if (abortController) {
-      abortController.signal.addEventListener('abort', () => {
-        abortRequested = true;
-        childProcess.kill('SIGTERM');
-      });
-      if (abortController.signal.aborted) {
-        abortRequested = true;
-        childProcess.kill('SIGTERM');
-      }
+    // Suppress spinner and interactive elements for non-TTY usage
+    args.push('-q');
+
+    // Set working directory
+    if (options.cwd) {
+      args.push('-c', options.cwd);
     }
 
-    const exitCodePromise = new Promise<{ code: number; signal: NodeJS.Signals | null }>(
-      (resolve) => {
-        childProcess.on('close', (code, signal) =>
-          resolve({ code: code ?? 0, signal: signal ?? null })
-        );
-        childProcess.on('error', (err) => {
-          console.error('[OpenCodeProvider] Process error:', err);
-          resolve({ code: 1, signal: null });
-        });
+    // Handle model selection
+    // Strip 'opencode-' prefix if present, OpenCode uses format like 'anthropic/claude-sonnet-4-5'
+    if (options.model) {
+      const model = stripProviderPrefix(options.model);
+      args.push('--model', model);
+    }
+
+    // Use '-' to indicate reading prompt from stdin
+    // This avoids shell escaping issues with special characters
+    args.push('-');
+
+    return args;
+  }
+
+  // ==========================================================================
+  // Prompt Handling
+  // ==========================================================================
+
+  /**
+   * Extract prompt text from ExecuteOptions for passing via stdin
+   *
+   * Handles both string prompts and array-based prompts with content blocks.
+   * For array prompts with images, extracts only text content (images would
+   * need separate handling via file paths if OpenCode supports them).
+   *
+   * @param options - Execution options containing the prompt
+   * @returns Plain text prompt string
+   */
+  private extractPromptText(options: ExecuteOptions): string {
+    if (typeof options.prompt === 'string') {
+      return options.prompt;
+    }
+
+    // Array-based prompt - extract text content
+    if (Array.isArray(options.prompt)) {
+      return options.prompt
+        .filter((block) => block.type === 'text' && block.text)
+        .map((block) => block.text)
+        .join('\n');
+    }
+
+    throw new Error('Invalid prompt format: expected string or content block array');
+  }
+
+  /**
+   * Build subprocess options with stdin data for prompt
+   *
+   * Extends the base class method to add stdinData containing the prompt.
+   * This allows passing prompts via stdin instead of CLI arguments,
+   * avoiding shell escaping issues with special characters.
+   *
+   * @param options - Execution options
+   * @param cliArgs - CLI arguments from buildCliArgs
+   * @returns SubprocessOptions with stdinData set
+   */
+  protected buildSubprocessOptions(options: ExecuteOptions, cliArgs: string[]): SubprocessOptions {
+    const subprocessOptions = super.buildSubprocessOptions(options, cliArgs);
+
+    // Pass prompt via stdin to avoid shell interpretation of special characters
+    // like $(), backticks, quotes, etc. that may appear in prompts or file content
+    subprocessOptions.stdinData = this.extractPromptText(options);
+
+    return subprocessOptions;
+  }
+
+  /**
+   * Normalize a raw CLI event to ProviderMessage format
+   *
+   * Maps OpenCode event types to the standard ProviderMessage structure:
+   * - text-delta -> type: 'assistant', content with type: 'text'
+   * - text-end -> null (informational, no message needed)
+   * - tool-call -> type: 'assistant', content with type: 'tool_use'
+   * - tool-result -> type: 'assistant', content with type: 'tool_result'
+   * - tool-error -> type: 'error'
+   * - start-step -> null (informational, no message needed)
+   * - finish-step with success -> type: 'result', subtype: 'success'
+   * - finish-step with error -> type: 'error'
+   *
+   * @param event - Raw event from OpenCode CLI JSONL output
+   * @returns Normalized ProviderMessage or null to skip the event
+   */
+  normalizeEvent(event: unknown): ProviderMessage | null {
+    if (!event || typeof event !== 'object') {
+      return null;
+    }
+
+    const openCodeEvent = event as OpenCodeStreamEvent;
+
+    switch (openCodeEvent.type) {
+      case 'text-delta': {
+        const textEvent = openCodeEvent as OpenCodeTextDeltaEvent;
+
+        // Skip empty text deltas
+        if (!textEvent.text) {
+          return null;
+        }
+
+        const content: ContentBlock[] = [
+          {
+            type: 'text',
+            text: textEvent.text,
+          },
+        ];
+
+        return {
+          type: 'assistant',
+          session_id: textEvent.session_id,
+          message: {
+            role: 'assistant',
+            content,
+          },
+        };
       }
-    );
 
-    const stderrPromise = this.collectStream(childProcess.stderr as NodeJS.ReadableStream);
-
-    let responseText = '';
-    let sawResult = false;
-    let sawError = false;
-    let sessionId: string | undefined;
-    let bufferedText = '';
-    const FLUSH_THRESHOLD = 400;
-
-    const flushBufferedText = (): ProviderMessage | null => {
-      if (!bufferedText) {
+      case 'text-end': {
+        // Text end is informational - no message needed
         return null;
       }
 
-      const text = bufferedText;
-      bufferedText = '';
-      return {
-        type: 'assistant',
-        session_id: sessionId,
-        message: {
-          role: 'assistant',
-          content: [
-            {
-              type: 'text',
-              text,
-            },
-          ],
-        },
-      };
-    };
+      case 'tool-call': {
+        const toolEvent = openCodeEvent as OpenCodeToolCallEvent;
 
-    try {
-      await new Promise((resolve) => setImmediate(resolve));
-      if (spawnError) {
-        throw spawnError;
-      }
+        // Generate a tool use ID if not provided
+        const toolUseId = toolEvent.call_id || generateToolUseId();
 
-      const eventStream = this.readJsonStream(childProcess.stdout as NodeJS.ReadableStream);
+        const content: ContentBlock[] = [
+          {
+            type: 'tool_use',
+            name: toolEvent.name,
+            tool_use_id: toolUseId,
+            input: toolEvent.args,
+          },
+        ];
 
-      for await (const msg of eventStream) {
-        if (!msg || typeof msg !== 'object') {
-          continue;
-        }
-
-        if (!sessionId && typeof msg.sessionID === 'string') {
-          sessionId = msg.sessionID;
-        }
-
-        if (msg.type === 'text') {
-          const content =
-            typeof msg.part?.text === 'string'
-              ? msg.part.text
-              : typeof msg.text === 'string'
-                ? msg.text
-                : '';
-
-          if (!content) {
-            continue;
-          }
-
-          responseText += content;
-          bufferedText += content;
-          if (bufferedText.length >= FLUSH_THRESHOLD || content.includes('\n')) {
-            const bufferedMsg = flushBufferedText();
-            if (bufferedMsg) {
-              yield bufferedMsg;
-            }
-          }
-          continue;
-        }
-
-        if (msg.type === 'tool_use') {
-          const bufferedMsg = flushBufferedText();
-          if (bufferedMsg) {
-            yield bufferedMsg;
-          }
-
-          const rawToolName = typeof msg.part?.tool === 'string' ? msg.part.tool : 'unknown';
-          const toolName = this.normalizeToolName(rawToolName);
-          const toolInput =
-            msg.part?.state?.input !== undefined ? msg.part.state.input : msg.part?.input;
-          const toolOutput =
-            msg.part?.state?.output !== undefined
-              ? msg.part.state.output
-              : msg.part?.output !== undefined
-                ? msg.part.output
-                : msg.part?.state?.error;
-          const toolUseId = typeof msg.part?.callID === 'string' ? msg.part.callID : undefined;
-
-          yield {
-            type: 'assistant',
-            session_id: sessionId,
-            message: {
-              role: 'assistant',
-              content: [
-                {
-                  type: 'tool_use',
-                  name: toolName,
-                  input: toolInput,
-                  tool_use_id: toolUseId,
-                },
-              ],
-            },
-          };
-
-          if (toolOutput !== undefined) {
-            yield {
-              type: 'assistant',
-              session_id: sessionId,
-              message: {
-                role: 'assistant',
-                content: [
-                  {
-                    type: 'tool_result',
-                    content: this.formatToolOutput(toolOutput),
-                    tool_use_id: toolUseId,
-                  },
-                ],
-              },
-            };
-          }
-          continue;
-        }
-
-        if (msg.type === 'tool_result') {
-          const bufferedMsg = flushBufferedText();
-          if (bufferedMsg) {
-            yield bufferedMsg;
-          }
-
-          const toolUseId = typeof msg.part?.callID === 'string' ? msg.part.callID : undefined;
-          const toolOutput =
-            msg.part?.state?.output !== undefined
-              ? msg.part.state.output
-              : msg.part?.output !== undefined
-                ? msg.part.output
-                : msg.part?.state?.error;
-
-          if (toolOutput !== undefined) {
-            yield {
-              type: 'assistant',
-              session_id: sessionId,
-              message: {
-                role: 'assistant',
-                content: [
-                  {
-                    type: 'tool_result',
-                    content: this.formatToolOutput(toolOutput),
-                    tool_use_id: toolUseId,
-                  },
-                ],
-              },
-            };
-          }
-          continue;
-        }
-
-        if (msg.type === 'error') {
-          sawError = true;
-          const bufferedMsg = flushBufferedText();
-          if (bufferedMsg) {
-            yield bufferedMsg;
-          }
-          const errorMessage =
-            typeof msg.error === 'string'
-              ? msg.error
-              : typeof msg.message === 'string'
-                ? msg.message
-                : 'OpenCode error';
-          yield {
-            type: 'error',
-            error: errorMessage,
-          };
-          break;
-        }
-
-        if (msg.type === 'result') {
-          const bufferedMsg = flushBufferedText();
-          if (bufferedMsg) {
-            yield bufferedMsg;
-          }
-
-          sawResult = true;
-          yield {
-            type: 'result',
-            subtype: msg.subtype === 'error' ? 'error' : 'success',
-            session_id: sessionId,
-            result: typeof msg.result === 'string' ? msg.result : responseText,
-            error: typeof msg.error === 'string' ? msg.error : undefined,
-          };
-          continue;
-        }
-
-        if (msg.type === 'step_finish') {
-          continue;
-        }
-      }
-
-      const bufferedMsg = flushBufferedText();
-      if (bufferedMsg) {
-        yield bufferedMsg;
-      }
-
-      const [{ code: exitCode, signal }, stderrOutput] = await Promise.all([
-        exitCodePromise,
-        stderrPromise,
-      ]);
-
-      if (exitCode !== 0) {
-        const isSigterm = signal === 'SIGTERM' || exitCode === 143;
-        if (abortRequested && isSigterm) {
-          const abortMsg = 'opencode aborted';
-          logger.warn(`${abortMsg}${signal ? ` (signal: ${signal})` : ''}`);
-          if (!sawError) {
-            yield {
-              type: 'error',
-              error: abortMsg,
-            };
-          }
-          return;
-        }
-
-        const errorMsg =
-          stderrOutput || `opencode exited with code ${exitCode}${signal ? ` (${signal})` : ''}`;
-        logger.error(errorMsg);
-        if (!sawError) {
-          yield {
-            type: 'error',
-            error: errorMsg,
-          };
-        }
-        return;
-      }
-
-      if (!sawResult && !sawError) {
-        yield {
-          type: 'result',
-          subtype: 'success',
-          session_id: sessionId,
-          result: responseText,
+        return {
+          type: 'assistant',
+          session_id: toolEvent.session_id,
+          message: {
+            role: 'assistant',
+            content,
+          },
         };
       }
-    } catch (error) {
-      const bufferedMsg = flushBufferedText();
-      if (bufferedMsg) {
-        yield bufferedMsg;
+
+      case 'tool-result': {
+        const resultEvent = openCodeEvent as OpenCodeToolResultEvent;
+
+        const content: ContentBlock[] = [
+          {
+            type: 'tool_result',
+            tool_use_id: resultEvent.call_id,
+            content: resultEvent.output,
+          },
+        ];
+
+        return {
+          type: 'assistant',
+          session_id: resultEvent.session_id,
+          message: {
+            role: 'assistant',
+            content,
+          },
+        };
       }
-      yield {
-        type: 'error',
-        error: this.formatExecutionError(error),
-      };
-    } finally {
-      childProcess.stdin?.end();
-      if (!childProcess.killed) {
-        childProcess.kill();
+
+      case 'tool-error': {
+        const errorEvent = openCodeEvent as OpenCodeToolErrorEvent;
+
+        return {
+          type: 'error',
+          session_id: errorEvent.session_id,
+          error: errorEvent.error || 'Tool execution failed',
+        };
       }
-      if (tempConfig) {
-        try {
-          await tempConfig.cleanup();
-        } catch (error) {
-          logger.warn('Failed to clean up OpenCode temp config', {
-            error: this.formatExecutionError(error),
-          });
+
+      case 'start-step': {
+        // Start step is informational - no message needed
+        return null;
+      }
+
+      case 'finish-step': {
+        const finishEvent = openCodeEvent as OpenCodeFinishStepEvent;
+
+        // Check if the step failed
+        if (finishEvent.success === false || finishEvent.error) {
+          return {
+            type: 'error',
+            session_id: finishEvent.session_id,
+            error: finishEvent.error || 'Step execution failed',
+          };
         }
+
+        // Successful completion
+        return {
+          type: 'result',
+          subtype: 'success',
+          session_id: finishEvent.session_id,
+          result: finishEvent.result,
+        };
+      }
+
+      default: {
+        // Unknown event type - skip it
+        return null;
       }
     }
   }
 
-  /**
-   * Detect OpenCode CLI installation
-   */
-  async detectInstallation(): Promise<InstallationStatus> {
-    const cliPath = await this.resolveCliPath();
-    if (cliPath) {
-      let version = '';
-      try {
-        const versionCommand = `"${cliPath}" --version`;
-        const { stdout: versionOut } = await execAsync(versionCommand);
-        version = versionOut.trim().split('\n')[0];
-      } catch {
-        // Version command might not be available
-      }
-
-      const authenticated = await this.checkAuthentication(cliPath);
-
-      return {
-        installed: true,
-        path: cliPath,
-        version,
-        method: 'cli',
-        hasApiKey: authenticated,
-        authenticated,
-      };
-    }
-
-    return {
-      installed: false,
-      method: 'cli',
-      hasApiKey: false,
-      authenticated: false,
-    };
-  }
+  // ==========================================================================
+  // Model Configuration
+  // ==========================================================================
 
   /**
-   * Get available OpenCode models (free defaults)
+   * Get available models for OpenCode
+   *
+   * Returns model definitions for supported AI providers:
+   * - Anthropic Claude models (Sonnet, Opus, Haiku)
+   * - OpenAI GPT-4o
+   * - Google Gemini 2.5 Pro
    */
   getAvailableModels(): ModelDefinition[] {
     return [
+      // OpenCode Free Tier Models
       {
-        id: 'glm4.7',
-        name: 'GLM 4.7 (Free)',
-        modelString: 'opencode/glm-4.7-free',
+        id: 'opencode/big-pickle',
+        name: 'Big Pickle (Free)',
+        modelString: 'opencode/big-pickle',
         provider: 'opencode',
-        description: 'GLM 4.7 - Free model with solid general capabilities.',
-        contextWindow: 128000,
-        maxOutputTokens: 4096,
-        supportsVision: false,
+        description: 'OpenCode free tier model - great for general coding',
         supportsTools: true,
-        tier: 'basic' as const,
+        supportsVision: false,
+        tier: 'basic',
+      },
+      {
+        id: 'opencode/gpt-5-nano',
+        name: 'GPT-5 Nano (Free)',
+        modelString: 'opencode/gpt-5-nano',
+        provider: 'opencode',
+        description: 'Fast and lightweight free tier model',
+        supportsTools: true,
+        supportsVision: false,
+        tier: 'basic',
+      },
+      {
+        id: 'opencode/grok-code',
+        name: 'Grok Code (Free)',
+        modelString: 'opencode/grok-code',
+        provider: 'opencode',
+        description: 'OpenCode free tier Grok model for coding',
+        supportsTools: true,
+        supportsVision: false,
+        tier: 'basic',
+      },
+      // Amazon Bedrock - Claude Models
+      {
+        id: 'amazon-bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0',
+        name: 'Claude Sonnet 4.5 (Bedrock)',
+        modelString: 'amazon-bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0',
+        provider: 'opencode',
+        description: 'Latest Claude Sonnet via AWS Bedrock - fast and intelligent',
+        supportsTools: true,
+        supportsVision: true,
+        tier: 'premium',
         default: true,
+      },
+      {
+        id: 'amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0',
+        name: 'Claude Opus 4.5 (Bedrock)',
+        modelString: 'amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0',
+        provider: 'opencode',
+        description: 'Most capable Claude model via AWS Bedrock',
+        supportsTools: true,
+        supportsVision: true,
+        tier: 'premium',
+      },
+      {
+        id: 'amazon-bedrock/anthropic.claude-haiku-4-5-20251001-v1:0',
+        name: 'Claude Haiku 4.5 (Bedrock)',
+        modelString: 'amazon-bedrock/anthropic.claude-haiku-4-5-20251001-v1:0',
+        provider: 'opencode',
+        description: 'Fastest Claude model via AWS Bedrock',
+        supportsTools: true,
+        supportsVision: true,
+        tier: 'standard',
+      },
+      // Amazon Bedrock - DeepSeek Models
+      {
+        id: 'amazon-bedrock/deepseek.r1-v1:0',
+        name: 'DeepSeek R1 (Bedrock)',
+        modelString: 'amazon-bedrock/deepseek.r1-v1:0',
+        provider: 'opencode',
+        description: 'DeepSeek R1 reasoning model - excellent for coding',
+        supportsTools: true,
+        supportsVision: false,
+        tier: 'premium',
+      },
+      // Amazon Bedrock - Amazon Nova Models
+      {
+        id: 'amazon-bedrock/amazon.nova-pro-v1:0',
+        name: 'Amazon Nova Pro (Bedrock)',
+        modelString: 'amazon-bedrock/amazon.nova-pro-v1:0',
+        provider: 'opencode',
+        description: 'Amazon Nova Pro - balanced performance',
+        supportsTools: true,
+        supportsVision: true,
+        tier: 'standard',
+      },
+      // Amazon Bedrock - Meta Llama Models
+      {
+        id: 'amazon-bedrock/meta.llama4-maverick-17b-instruct-v1:0',
+        name: 'Llama 4 Maverick 17B (Bedrock)',
+        modelString: 'amazon-bedrock/meta.llama4-maverick-17b-instruct-v1:0',
+        provider: 'opencode',
+        description: 'Meta Llama 4 Maverick via AWS Bedrock',
+        supportsTools: true,
+        supportsVision: false,
+        tier: 'standard',
+      },
+      // Amazon Bedrock - Qwen Models
+      {
+        id: 'amazon-bedrock/qwen.qwen3-coder-480b-a35b-v1:0',
+        name: 'Qwen3 Coder 480B (Bedrock)',
+        modelString: 'amazon-bedrock/qwen.qwen3-coder-480b-a35b-v1:0',
+        provider: 'opencode',
+        description: 'Qwen3 Coder 480B - excellent for coding',
+        supportsTools: true,
+        supportsVision: false,
+        tier: 'premium',
       },
     ];
   }
 
+  // ==========================================================================
+  // Feature Support
+  // ==========================================================================
+
   /**
-   * Check if the provider supports a specific feature
+   * Check if a feature is supported by OpenCode
+   *
+   * Supported features:
+   * - tools: Function calling / tool use
+   * - text: Text generation
+   * - vision: Image understanding
    */
   supportsFeature(feature: string): boolean {
-    const supportedFeatures = ['tools', 'text', 'streaming'];
+    const supportedFeatures = ['tools', 'text', 'vision'];
     return supportedFeatures.includes(feature);
   }
 
-  private mapModelToOpenCodeFormat(model: string): string {
-    const modelMap: Record<string, string> = {
-      'glm4.7': 'opencode/glm-4.7-free',
-      'glm-4.7': 'opencode/glm-4.7-free',
-      glm: 'opencode/glm-4.7-free',
-      'glm/glm4.7': 'opencode/glm-4.7-free',
-      opencode: 'opencode/glm-4.7-free',
-    };
+  // ==========================================================================
+  // Authentication
+  // ==========================================================================
 
-    return modelMap[model.toLowerCase()] || model;
-  }
+  /**
+   * Check authentication status for OpenCode CLI
+   *
+   * Checks for authentication via:
+   * - OAuth token in auth file
+   * - API key in auth file
+   */
+  async checkAuth(): Promise<OpenCodeAuthStatus> {
+    const authIndicators = await getOpenCodeAuthIndicators();
 
-  private buildPrompt(prompt: string | ContentBlock[], systemPrompt?: string): string {
-    let fullPrompt = '';
-
-    if (systemPrompt) {
-      fullPrompt = `${systemPrompt}\n\n---\n\n`;
-    }
-
-    if (Array.isArray(prompt)) {
-      const textParts = prompt.filter((p) => p.type === 'text' && p.text).map((p) => p.text);
-      fullPrompt += textParts.join('\n');
-    } else {
-      fullPrompt += prompt;
-    }
-
-    return fullPrompt;
-  }
-
-  private async *readJsonStream(stream: NodeJS.ReadableStream): AsyncGenerator<any> {
-    const readline = await import('readline');
-    const rl = readline.createInterface({
-      input: stream,
-      crlfDelay: Infinity,
-    });
-
-    for await (const line of rl) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-      try {
-        const message = JSON.parse(trimmed);
-        yield message;
-      } catch (error) {
-        logger.warn('Failed to parse OpenCode JSON line', { line: trimmed.slice(0, 120) });
-        yield {
-          type: 'text',
-          text: line + '\n',
-        };
-      }
-    }
-  }
-
-  private async collectStream(stream: NodeJS.ReadableStream): Promise<string> {
-    let output = '';
-    for await (const chunk of stream) {
-      output += chunk.toString();
-    }
-    return output;
-  }
-
-  private formatExecutionError(error: unknown): string {
-    if (error && typeof error === 'object' && 'code' in error) {
-      const code = (error as { code?: string }).code;
-      if (code === 'ENOENT') {
-        return 'OpenCode CLI not found. Please install opencode.';
-      }
-      if (code === 'EPIPE') {
-        return 'OpenCode CLI closed unexpectedly (EPIPE). Check installation, auth, and config.';
-      }
-    }
-
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.toLowerCase().includes('auth')) {
-      return 'OpenCode authentication required. Run: opencode auth login';
-    }
-
-    return `OpenCode error: ${message}`;
-  }
-
-  private async checkAuthentication(cliPath?: string): Promise<boolean> {
-    try {
-      const command = cliPath ? `"${cliPath}" models --refresh` : 'opencode models --refresh';
-      await execAsync(command);
-      return true;
-    } catch {
-      const configDir = path.join(os.homedir(), '.config', 'opencode');
-      const authFile = path.join(configDir, 'auth.json');
-      try {
-        await fs.access(authFile);
-        return true;
-      } catch {
-        return false;
-      }
-    }
-  }
-
-  private async resolveCliPath(): Promise<string | null> {
-    const isWindows = os.platform() === 'win32';
-    try {
-      const findCommand = isWindows ? 'where opencode' : 'which opencode';
-      const { stdout } = await execAsync(findCommand);
-      const cliPath = stdout.trim().split(/\r?\n/)[0];
-      if (cliPath) {
-        return cliPath;
-      }
-    } catch {
-      // Fall back to common locations
-    }
-
-    const commonPaths = this.getCommonOpenCodePaths();
-    for (const candidate of commonPaths) {
-      try {
-        await fs.access(candidate);
-        return candidate;
-      } catch {
-        // Not found at this path
-      }
-    }
-
-    return null;
-  }
-
-  private async createTempConfig(
-    cwd: string,
-    allowedTools?: string[],
-    maxTurns?: number
-  ): Promise<{ path: string; cleanup: () => Promise<void> } | null> {
-    const overrides = this.buildToolOverrides(allowedTools, maxTurns);
-    if (!overrides) {
-      return null;
-    }
-
-    let baseConfig: Record<string, unknown> = {};
-    const projectConfig = await this.readProjectConfig(cwd);
-    if (projectConfig) {
-      baseConfig = projectConfig;
-    }
-
-    const merged = this.mergeConfigs(baseConfig, overrides);
-    if (!merged.$schema) {
-      merged.$schema = 'https://opencode.ai/config.json';
-    }
-
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'automaker-opencode-'));
-    const configPath = path.join(tempDir, 'opencode.json');
-    await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf8');
-
-    return {
-      path: configPath,
-      cleanup: async () => {
-        await fs.rm(tempDir, { recursive: true, force: true });
-      },
-    };
-  }
-
-  private buildToolOverrides(
-    allowedTools?: string[],
-    maxTurns?: number
-  ): Record<string, unknown> | null {
-    const toolsToUse =
-      allowedTools && allowedTools.length > 0
-        ? allowedTools
-        : ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
-
-    const normalized = new Set(toolsToUse.map((tool) => tool.toLowerCase()));
-    const allowRead = normalized.has('read');
-    const allowGlob = normalized.has('glob');
-    const allowGrep = normalized.has('grep');
-    const allowWrite = normalized.has('write') || normalized.has('edit');
-    const allowEdit = normalized.has('edit') || normalized.has('write');
-    const allowBash = normalized.has('bash');
-    const allowWebSearch = normalized.has('websearch');
-    const allowWebFetch = normalized.has('webfetch') || allowWebSearch;
-
-    const tools: Record<string, boolean> = {
-      read: allowRead,
-      glob: allowGlob,
-      grep: allowGrep,
-      list: allowRead || allowGlob || allowGrep,
-      write: allowWrite,
-      edit: allowEdit,
-      patch: allowEdit || allowWrite,
-      bash: allowBash,
-      webfetch: allowWebFetch,
-      websearch: allowWebSearch,
-      todoread: allowRead,
-      todowrite: allowWrite || allowEdit,
-    };
-
-    const permission: Record<string, string | Record<string, string>> = {
-      edit: allowEdit ? 'allow' : 'deny',
-      bash: allowBash ? 'allow' : 'deny',
-      webfetch: allowWebFetch ? 'allow' : 'deny',
-      skill: 'deny',
-      external_directory: allowEdit || allowBash ? 'allow' : 'deny',
-      doom_loop: 'allow',
-    };
-
-    const overrides: Record<string, unknown> = { tools, permission };
-
-    if (typeof maxTurns === 'number' && Number.isFinite(maxTurns) && maxTurns > 0) {
-      const maxSteps = Math.floor(maxTurns);
-      overrides.agent = {
-        build: { maxSteps },
-        plan: { maxSteps },
+    // Check for OAuth token
+    if (authIndicators.hasOAuthToken) {
+      return {
+        authenticated: true,
+        method: 'oauth',
+        hasOAuthToken: true,
+        hasApiKey: authIndicators.hasApiKey,
       };
     }
 
-    return overrides;
-  }
-
-  private async readProjectConfig(cwd: string): Promise<Record<string, unknown> | null> {
-    const configPath = await this.findProjectConfigPath(cwd);
-    if (!configPath) {
-      return null;
+    // Check for API key
+    if (authIndicators.hasApiKey) {
+      return {
+        authenticated: true,
+        method: 'api_key',
+        hasOAuthToken: false,
+        hasApiKey: true,
+      };
     }
 
-    return this.readConfigFile(configPath);
-  }
-
-  private async findProjectConfigPath(cwd: string): Promise<string | null> {
-    let currentDir = path.resolve(cwd);
-
-    while (true) {
-      const jsonPath = path.join(currentDir, 'opencode.json');
-      const jsoncPath = path.join(currentDir, 'opencode.jsonc');
-      if (await this.pathExists(jsonPath)) {
-        return jsonPath;
-      }
-      if (await this.pathExists(jsoncPath)) {
-        return jsoncPath;
-      }
-
-      const gitPath = path.join(currentDir, '.git');
-      if (await this.pathExists(gitPath)) {
-        return null;
-      }
-
-      const parentDir = path.dirname(currentDir);
-      if (parentDir === currentDir) {
-        return null;
-      }
-      currentDir = parentDir;
-    }
-  }
-
-  private async readConfigFile(filePath: string): Promise<Record<string, unknown> | null> {
-    try {
-      const raw = await fs.readFile(filePath, 'utf8');
-      const stripped = this.stripJsonComments(raw);
-      const normalized = this.stripTrailingCommas(stripped);
-      return JSON.parse(normalized) as Record<string, unknown>;
-    } catch (error) {
-      logger.warn('Failed to read OpenCode project config', {
-        filePath,
-        error: this.formatExecutionError(error),
-      });
-      return null;
-    }
-  }
-
-  private stripJsonComments(input: string): string {
-    let result = '';
-    let inString = false;
-    let stringChar = '';
-    let escaped = false;
-
-    for (let i = 0; i < input.length; i += 1) {
-      const current = input[i];
-      const next = input[i + 1];
-
-      if (inString) {
-        result += current;
-        if (escaped) {
-          escaped = false;
-        } else if (current === '\\\\') {
-          escaped = true;
-        } else if (current === stringChar) {
-          inString = false;
-          stringChar = '';
-        }
-        continue;
-      }
-
-      if (current === '"' || current === "'") {
-        inString = true;
-        stringChar = current;
-        result += current;
-        continue;
-      }
-
-      if (current === '/' && next === '/') {
-        while (i < input.length && input[i] !== '\n') {
-          i += 1;
-        }
-        result += '\n';
-        continue;
-      }
-
-      if (current === '/' && next === '*') {
-        i += 2;
-        while (i < input.length && !(input[i] === '*' && input[i + 1] === '/')) {
-          i += 1;
-        }
-        i += 1;
-        continue;
-      }
-
-      result += current;
-    }
-
-    return result;
-  }
-
-  private stripTrailingCommas(input: string): string {
-    return input.replace(/,\s*([}\]])/g, '$1');
-  }
-
-  private mergeConfigs(
-    base: Record<string, unknown>,
-    override: Record<string, unknown>
-  ): Record<string, unknown> {
-    const result: Record<string, unknown> = { ...base };
-
-    for (const [key, value] of Object.entries(override)) {
-      const baseValue = result[key];
-      if (
-        value &&
-        typeof value === 'object' &&
-        !Array.isArray(value) &&
-        baseValue &&
-        typeof baseValue === 'object' &&
-        !Array.isArray(baseValue)
-      ) {
-        result[key] = this.mergeConfigs(
-          baseValue as Record<string, unknown>,
-          value as Record<string, unknown>
-        );
-      } else {
-        result[key] = value;
-      }
-    }
-
-    return result;
-  }
-
-  private normalizeToolName(toolName: string): string {
-    const normalized = toolName.trim().toLowerCase();
-    const toolMap: Record<string, string> = {
-      read: 'Read',
-      write: 'Write',
-      edit: 'Edit',
-      glob: 'Glob',
-      grep: 'Grep',
-      bash: 'Bash',
-      websearch: 'WebSearch',
-      webfetch: 'WebFetch',
-      todoread: 'TodoRead',
-      todowrite: 'TodoWrite',
-      list: 'List',
-      patch: 'Patch',
+    return {
+      authenticated: false,
+      method: 'none',
+      hasOAuthToken: false,
+      hasApiKey: false,
     };
-
-    return toolMap[normalized] || toolName;
   }
 
-  private formatToolOutput(output: unknown): string {
-    if (output === undefined || output === null) {
-      return '';
-    }
-    if (typeof output === 'string') {
-      return output;
-    }
-    try {
-      return JSON.stringify(output, null, 2);
-    } catch {
-      return String(output);
-    }
-  }
+  // ==========================================================================
+  // Installation Detection
+  // ==========================================================================
 
-  private async pathExists(filePath: string): Promise<boolean> {
-    try {
-      await fs.access(filePath);
-      return true;
-    } catch {
-      return false;
-    }
-  }
+  /**
+   * Detect OpenCode installation status
+   *
+   * Checks if the opencode CLI is available either through:
+   * - Direct installation (npm global)
+   * - NPX (fallback on Windows)
+   * Also checks authentication status.
+   */
+  async detectInstallation(): Promise<InstallationStatus> {
+    this.ensureCliDetected();
 
-  private getCommonOpenCodePaths(): string[] {
-    const isWindows = os.platform() === 'win32';
-    const homeDir = os.homedir();
+    const installed = await this.isInstalled();
+    const auth = await this.checkAuth();
 
-    if (isWindows) {
-      return [
-        path.join(homeDir, 'AppData', 'Local', 'opencode', 'opencode.exe'),
-        path.join(homeDir, '.local', 'bin', 'opencode.exe'),
-        'C:\\\\Program Files\\\\opencode\\\\opencode.exe',
-      ];
-    }
-
-    return [
-      '/usr/local/bin/opencode',
-      path.join(homeDir, '.local', 'bin', 'opencode'),
-      '/opt/opencode/opencode',
-    ];
+    return {
+      installed,
+      path: this.cliPath || undefined,
+      method: this.detectedStrategy === 'npx' ? 'npm' : 'cli',
+      authenticated: auth.authenticated,
+      hasApiKey: auth.hasApiKey,
+      hasOAuthToken: auth.hasOAuthToken,
+    };
   }
 }

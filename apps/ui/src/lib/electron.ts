@@ -1,6 +1,6 @@
 // Type definitions for Electron IPC API
 import type { SessionListItem, Message } from '@/types/electron';
-import type { ClaudeUsageResponse } from '@/store/app-store';
+import type { ClaudeUsageResponse, CodexUsageResponse } from '@/store/app-store';
 import type {
   IssueValidationVerdict,
   IssueValidationConfidence,
@@ -13,8 +13,18 @@ import type {
   AgentModel,
   GitHubComment,
   IssueCommentsResult,
-  BacklogPlanResult,
-  BacklogPlanEvent,
+  Idea,
+  IdeaCategory,
+  IdeationSession,
+  IdeationMessage,
+  IdeationPrompt,
+  PromptCategory,
+  ProjectAnalysisResult,
+  AnalysisSuggestion,
+  StartSessionOptions,
+  CreateIdeaInput,
+  UpdateIdeaInput,
+  ConvertToFeatureOptions,
 } from '@automaker/types';
 import { getJSON, setJSON, removeItem } from './storage';
 
@@ -30,9 +40,105 @@ export type {
   StoredValidation,
   GitHubComment,
   IssueCommentsResult,
-  BacklogPlanResult,
-  BacklogPlanEvent,
 };
+
+// Re-export ideation types
+export type {
+  Idea,
+  IdeaCategory,
+  IdeationSession,
+  IdeationMessage,
+  IdeationPrompt,
+  PromptCategory,
+  ProjectAnalysisResult,
+  AnalysisSuggestion,
+  StartSessionOptions,
+  CreateIdeaInput,
+  UpdateIdeaInput,
+  ConvertToFeatureOptions,
+};
+
+// Ideation API interface
+export interface IdeationAPI {
+  // Session management
+  startSession: (
+    projectPath: string,
+    options?: StartSessionOptions
+  ) => Promise<{ success: boolean; session?: IdeationSession; error?: string }>;
+  getSession: (
+    projectPath: string,
+    sessionId: string
+  ) => Promise<{
+    success: boolean;
+    session?: IdeationSession;
+    messages?: IdeationMessage[];
+    error?: string;
+  }>;
+  sendMessage: (
+    sessionId: string,
+    message: string,
+    options?: { imagePaths?: string[]; model?: string }
+  ) => Promise<{ success: boolean; error?: string }>;
+  stopSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
+
+  // Ideas CRUD
+  listIdeas: (projectPath: string) => Promise<{ success: boolean; ideas?: Idea[]; error?: string }>;
+  createIdea: (
+    projectPath: string,
+    idea: CreateIdeaInput
+  ) => Promise<{ success: boolean; idea?: Idea; error?: string }>;
+  getIdea: (
+    projectPath: string,
+    ideaId: string
+  ) => Promise<{ success: boolean; idea?: Idea; error?: string }>;
+  updateIdea: (
+    projectPath: string,
+    ideaId: string,
+    updates: UpdateIdeaInput
+  ) => Promise<{ success: boolean; idea?: Idea; error?: string }>;
+  deleteIdea: (
+    projectPath: string,
+    ideaId: string
+  ) => Promise<{ success: boolean; error?: string }>;
+
+  // Project analysis
+  analyzeProject: (
+    projectPath: string
+  ) => Promise<{ success: boolean; analysis?: ProjectAnalysisResult; error?: string }>;
+
+  // Generate suggestions from a prompt
+  generateSuggestions: (
+    projectPath: string,
+    promptId: string,
+    category: IdeaCategory,
+    count?: number
+  ) => Promise<{ success: boolean; suggestions?: AnalysisSuggestion[]; error?: string }>;
+
+  // Convert to feature
+  convertToFeature: (
+    projectPath: string,
+    ideaId: string,
+    options?: ConvertToFeatureOptions
+  ) => Promise<{ success: boolean; feature?: any; featureId?: string; error?: string }>;
+
+  // Add suggestion directly to board as feature
+  addSuggestionToBoard: (
+    projectPath: string,
+    suggestion: AnalysisSuggestion
+  ) => Promise<{ success: boolean; featureId?: string; error?: string }>;
+
+  // Get guided prompts (single source of truth from backend)
+  getPrompts: () => Promise<{
+    success: boolean;
+    prompts?: IdeationPrompt[];
+    categories?: PromptCategory[];
+    error?: string;
+  }>;
+
+  // Event subscriptions
+  onStream: (callback: (event: any) => void) => () => void;
+  onAnalysisEvent: (callback: (event: any) => void) => () => void;
+}
 
 export interface FileEntry {
   name: string;
@@ -353,7 +459,9 @@ export interface FeaturesAPI {
   update: (
     projectPath: string,
     featureId: string,
-    updates: Partial<Feature>
+    updates: Partial<Feature>,
+    descriptionHistorySource?: 'enhance' | 'edit',
+    enhancementMode?: 'improve' | 'technical' | 'simplify' | 'acceptance'
   ) => Promise<{ success: boolean; feature?: Feature; error?: string }>;
   delete: (projectPath: string, featureId: string) => Promise<{ success: boolean; error?: string }>;
   getAgentOutput: (
@@ -460,6 +568,7 @@ export interface ElectronAPI {
     mimeType: string,
     projectPath?: string
   ) => Promise<SaveImageResult>;
+  isElectron?: boolean;
   checkClaudeCli?: () => Promise<{
     success: boolean;
     status?: string;
@@ -495,20 +604,6 @@ export interface ElectronAPI {
   features?: FeaturesAPI;
   runningAgents?: RunningAgentsAPI;
   github?: GitHubAPI;
-  backlogPlan?: {
-    generate: (
-      projectPath: string,
-      prompt: string,
-      model?: string
-    ) => Promise<{ success: boolean; error?: string }>;
-    stop: () => Promise<{ success: boolean; error?: string }>;
-    status: () => Promise<{ success: boolean; isRunning?: boolean; error?: string }>;
-    apply: (
-      projectPath: string,
-      plan: BacklogPlanResult
-    ) => Promise<{ success: boolean; appliedChanges?: string[]; error?: string }>;
-    onEvent: (callback: (event: BacklogPlanEvent) => void) => () => void;
-  };
   enhancePrompt?: {
     enhance: (
       originalText: string,
@@ -520,141 +615,43 @@ export interface ElectronAPI {
       error?: string;
     }>;
   };
-  setup?: {
-    getClaudeStatus: () => Promise<{
-      success: boolean;
-      status?: string;
-      installed?: boolean;
-      method?: string;
-      version?: string;
-      path?: string;
-      auth?: {
-        authenticated: boolean;
-        method: string;
-        hasCredentialsFile?: boolean;
-        hasToken?: boolean;
-        hasStoredOAuthToken?: boolean;
-        hasStoredApiKey?: boolean;
-        hasEnvApiKey?: boolean;
-        hasEnvOAuthToken?: boolean;
-      };
-      error?: string;
-    }>;
-    getCursorStatus?: () => Promise<{
-      success: boolean;
-      status?: string;
-      installed?: boolean;
-      method?: string;
-      version?: string;
-      path?: string;
-      auth?: {
-        authenticated: boolean;
-        method: string;
-        hasApiKey?: boolean;
-        hasStoredApiKey?: boolean;
-        hasEnvApiKey?: boolean;
-        apiKeyValid?: boolean;
-      };
-      error?: string;
-    }>;
-    getOpenCodeStatus?: () => Promise<{
-      success: boolean;
-      status?: string;
-      installed?: boolean;
-      method?: string;
-      version?: string;
-      path?: string;
-      auth?: {
-        authenticated: boolean;
-        method: string;
-        hasApiKey?: boolean;
-        apiKeyValid?: boolean;
-        hasEnvApiKey?: boolean;
-      };
-      error?: string;
-    }>;
-    getCodexStatus?: () => Promise<{
-      success: boolean;
-      status?: string;
-      installed?: boolean;
-      method?: string;
-      version?: string;
-      path?: string;
-      auth?: {
-        authenticated: boolean;
-        method: string;
-        hasApiKey?: boolean;
-        apiKeyValid?: boolean;
-        hasEnvApiKey?: boolean;
-      };
-      error?: string;
-    }>;
-    installClaude: () => Promise<{
-      success: boolean;
-      message?: string;
-      error?: string;
-    }>;
-    authClaude: () => Promise<{
-      success: boolean;
-      token?: string;
-      requiresManualAuth?: boolean;
-      terminalOpened?: boolean;
-      command?: string;
-      error?: string;
-      message?: string;
-      output?: string;
-    }>;
-    storeApiKey: (
-      provider: string,
-      apiKey: string
-    ) => Promise<{ success: boolean; error?: string }>;
-    deleteApiKey: (
-      provider: string
-    ) => Promise<{ success: boolean; error?: string; message?: string }>;
-    getApiKeys: () => Promise<{
-      success: boolean;
-      hasAnthropicKey: boolean;
-      hasGoogleKey: boolean;
-    }>;
-    getPlatform: () => Promise<{
-      success: boolean;
-      platform: string;
-      arch: string;
-      homeDir: string;
-      isWindows: boolean;
-      isMac: boolean;
-      isLinux: boolean;
-    }>;
-    verifyClaudeAuth: (authMethod?: 'cli' | 'api_key') => Promise<{
-      success: boolean;
-      authenticated: boolean;
-      error?: string;
-    }>;
-    installCursor?: () => Promise<{
-      success: boolean;
-      message?: string;
-      error?: string;
-      output?: string;
-    }>;
-    verifyCursorAuth?: (method?: 'api_key' | 'any') => Promise<{
-      success: boolean;
-      authenticated: boolean;
-      method?: string;
-      output?: string;
-      error?: string;
-    }>;
-    getGhStatus?: () => Promise<{
-      success: boolean;
-      installed: boolean;
-      authenticated: boolean;
-      version: string | null;
-      path: string | null;
-      user: string | null;
-      error?: string;
-    }>;
-    onInstallProgress?: (callback: (progress: any) => void) => () => void;
-    onAuthProgress?: (callback: (progress: any) => void) => () => void;
+  templates?: {
+    clone: (
+      repoUrl: string,
+      projectName: string,
+      parentDir: string
+    ) => Promise<{ success: boolean; projectPath?: string; error?: string }>;
   };
+  backlogPlan?: {
+    generate: (
+      projectPath: string,
+      prompt: string,
+      model?: string
+    ) => Promise<{ success: boolean; error?: string }>;
+    stop: () => Promise<{ success: boolean; error?: string }>;
+    status: () => Promise<{ success: boolean; isRunning?: boolean; error?: string }>;
+    apply: (
+      projectPath: string,
+      plan: {
+        changes: Array<{
+          type: 'add' | 'update' | 'delete';
+          featureId?: string;
+          feature?: Record<string, unknown>;
+          reason: string;
+        }>;
+        summary: string;
+        dependencyUpdates: Array<{
+          featureId: string;
+          removedDependencies: string[];
+          addedDependencies: string[];
+        }>;
+      }
+    ) => Promise<{ success: boolean; appliedChanges?: string[]; error?: string }>;
+    onEvent: (callback: (data: unknown) => void) => () => void;
+  };
+  // Setup API surface is implemented by the main process and mirrored by HttpApiClient.
+  // Keep this intentionally loose to avoid tight coupling between front-end and server types.
+  setup?: any;
   agent?: {
     start: (
       sessionId: string,
@@ -727,6 +724,87 @@ export interface ElectronAPI {
       error?: string;
     }>;
   };
+  ideation?: IdeationAPI;
+  codex?: {
+    getUsage: () => Promise<CodexUsageResponse>;
+  };
+  settings?: {
+    getStatus: () => Promise<{
+      success: boolean;
+      hasGlobalSettings: boolean;
+      hasCredentials: boolean;
+      dataDir: string;
+      needsMigration: boolean;
+    }>;
+    getGlobal: () => Promise<{
+      success: boolean;
+      settings?: Record<string, unknown>;
+      error?: string;
+    }>;
+    updateGlobal: (updates: Record<string, unknown>) => Promise<{
+      success: boolean;
+      settings?: Record<string, unknown>;
+      error?: string;
+    }>;
+    getCredentials: () => Promise<{
+      success: boolean;
+      credentials?: {
+        anthropic: { configured: boolean; masked: string };
+        google: { configured: boolean; masked: string };
+        openai: { configured: boolean; masked: string };
+      };
+      error?: string;
+    }>;
+    updateCredentials: (updates: {
+      apiKeys?: { anthropic?: string; google?: string; openai?: string };
+    }) => Promise<{
+      success: boolean;
+      credentials?: {
+        anthropic: { configured: boolean; masked: string };
+        google: { configured: boolean; masked: string };
+        openai: { configured: boolean; masked: string };
+      };
+      error?: string;
+    }>;
+    getProject: (projectPath: string) => Promise<{
+      success: boolean;
+      settings?: Record<string, unknown>;
+      error?: string;
+    }>;
+    updateProject: (
+      projectPath: string,
+      updates: Record<string, unknown>
+    ) => Promise<{
+      success: boolean;
+      settings?: Record<string, unknown>;
+      error?: string;
+    }>;
+    migrate: (data: Record<string, string>) => Promise<{
+      success: boolean;
+      migratedGlobalSettings: boolean;
+      migratedCredentials: boolean;
+      migratedProjectCount: number;
+      errors: string[];
+    }>;
+    discoverAgents: (
+      projectPath?: string,
+      sources?: Array<'user' | 'project'>
+    ) => Promise<{
+      success: boolean;
+      agents?: Array<{
+        name: string;
+        definition: {
+          description: string;
+          prompt: string;
+          tools?: string[];
+          model?: 'sonnet' | 'opus' | 'haiku' | 'inherit';
+        };
+        source: 'user' | 'project';
+        filePath: string;
+      }>;
+      error?: string;
+    }>;
+  };
 }
 
 // Note: Window interface is declared in @/types/electron.d.ts
@@ -758,11 +836,13 @@ export const isElectron = (): boolean => {
     return false;
   }
 
-  if ((window as any).isElectron === true) {
+  const w = window as any;
+
+  if (w.isElectron === true) {
     return true;
   }
 
-  return window.electronAPI?.isElectron === true;
+  return !!w.electronAPI?.isElectron;
 };
 
 // Check if backend server is available
@@ -1173,55 +1253,6 @@ interface SetupAPI {
     };
     error?: string;
   }>;
-  getCursorStatus?: () => Promise<{
-    success: boolean;
-    status?: string;
-    installed?: boolean;
-    method?: string;
-    version?: string;
-    path?: string;
-    auth?: {
-      authenticated: boolean;
-      method: string;
-      hasApiKey?: boolean;
-      hasStoredApiKey?: boolean;
-      hasEnvApiKey?: boolean;
-      apiKeyValid?: boolean;
-    };
-    error?: string;
-  }>;
-  getOpenCodeStatus?: () => Promise<{
-    success: boolean;
-    status?: string;
-    installed?: boolean;
-    method?: string;
-    version?: string;
-    path?: string;
-    auth?: {
-      authenticated: boolean;
-      method: string;
-      hasApiKey?: boolean;
-      apiKeyValid?: boolean;
-      hasEnvApiKey?: boolean;
-    };
-    error?: string;
-  }>;
-  getCodexStatus?: () => Promise<{
-    success: boolean;
-    status?: string;
-    installed?: boolean;
-    method?: string;
-    version?: string;
-    path?: string;
-    auth?: {
-      authenticated: boolean;
-      method: string;
-      hasApiKey?: boolean;
-      apiKeyValid?: boolean;
-      hasEnvApiKey?: boolean;
-    };
-    error?: string;
-  }>;
   installClaude: () => Promise<{
     success: boolean;
     message?: string;
@@ -1260,25 +1291,6 @@ interface SetupAPI {
     authenticated: boolean;
     error?: string;
   }>;
-  installCursor?: () => Promise<{
-    success: boolean;
-    message?: string;
-    error?: string;
-    output?: string;
-  }>;
-  verifyCursorAuth?: (method?: 'api_key' | 'any') => Promise<{
-    success: boolean;
-    authenticated: boolean;
-    method?: string;
-    output?: string;
-    error?: string;
-  }>;
-  setDefaultProvider?: (provider: 'claude' | 'cursor' | 'opencode' | 'codex') => Promise<{
-    success: boolean;
-    provider?: 'claude' | 'cursor' | 'opencode' | 'codex';
-    message?: string;
-    error?: string;
-  }>;
   getGhStatus?: () => Promise<{
     success: boolean;
     installed: boolean;
@@ -1311,65 +1323,11 @@ function createMockSetupAPI(): SetupAPI {
         },
       };
     },
-    getCursorStatus: async () => {
-      console.log('[Mock] Getting Cursor status');
-      return {
-        success: true,
-        status: 'not_installed',
-        installed: false,
-        auth: {
-          authenticated: false,
-          method: 'none',
-          hasApiKey: false,
-          hasStoredApiKey: false,
-          hasEnvApiKey: false,
-          apiKeyValid: false,
-        },
-      };
-    },
-    getOpenCodeStatus: async () => {
-      console.log('[Mock] Getting OpenCode status');
-      return {
-        success: true,
-        status: 'not_installed',
-        installed: false,
-        auth: {
-          authenticated: false,
-          method: 'none',
-          hasApiKey: false,
-          apiKeyValid: false,
-          hasEnvApiKey: false,
-        },
-      };
-    },
-    getCodexStatus: async () => {
-      console.log('[Mock] Getting Codex status');
-      return {
-        success: true,
-        status: 'not_installed',
-        installed: false,
-        auth: {
-          authenticated: false,
-          method: 'none',
-          hasApiKey: false,
-          apiKeyValid: false,
-          hasEnvApiKey: false,
-        },
-      };
-    },
 
     installClaude: async () => {
       console.log('[Mock] Installing Claude CLI');
       // Simulate installation delay
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      return {
-        success: false,
-        error:
-          'CLI installation is only available in the Electron app. Please run the command manually.',
-      };
-    },
-    installCursor: async () => {
-      console.log('[Mock] Installing Cursor CLI');
       return {
         success: false,
         error:
@@ -1425,21 +1383,6 @@ function createMockSetupAPI(): SetupAPI {
         success: true,
         authenticated: false,
         error: 'Mock environment - authentication not available',
-      };
-    },
-    verifyCursorAuth: async (method?: 'api_key' | 'any') => {
-      console.log('[Mock] Verifying Cursor auth with method:', method);
-      return {
-        success: true,
-        authenticated: false,
-        error: 'Mock environment - authentication not available',
-      };
-    },
-    setDefaultProvider: async (provider: 'claude' | 'cursor' | 'opencode' | 'codex') => {
-      console.log('[Mock] Setting default provider:', provider);
-      return {
-        success: true,
-        provider,
       };
     },
 

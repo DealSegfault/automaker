@@ -1,190 +1,276 @@
+// @ts-nocheck
 import { Label } from '@/components/ui/label';
-import { Brain, Wand2, Code2, Terminal } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Brain, AlertTriangle } from 'lucide-react';
+import { AnthropicIcon, CursorIcon, OpenAIIcon } from '@/components/ui/provider-icon';
 import { cn } from '@/lib/utils';
-import { AgentModel, ModelProvider } from '@/store/app-store';
-import { resolveModelString } from '@automaker/model-resolver';
-import {
-  CLAUDE_MODELS,
-  CURSOR_MODELS,
-  OPENCODE_MODELS,
-  CODEX_MODELS,
-  ModelOption,
-} from './model-constants';
+import type { ModelAlias } from '@/store/app-store';
+import { useAppStore } from '@/store/app-store';
+import { useSetupStore } from '@/store/setup-store';
+import { getModelProvider, PROVIDER_PREFIXES, stripProviderPrefix } from '@automaker/types';
+import type { ModelProvider } from '@automaker/types';
+import { CLAUDE_MODELS, CURSOR_MODELS, CODEX_MODELS, ModelOption } from './model-constants';
 
 interface ModelSelectorProps {
-  selectedModel: AgentModel;
-  onModelSelect: (model: AgentModel) => void;
-  selectedProvider?: ModelProvider;
-  onProviderSelect?: (provider: ModelProvider) => void;
+  selectedModel: string; // Can be ModelAlias or "cursor-{id}"
+  onModelSelect: (model: string) => void;
   testIdPrefix?: string;
-  showProviderSelector?: boolean;
 }
 
 export function ModelSelector({
   selectedModel,
   onModelSelect,
-  selectedProvider,
-  onProviderSelect,
   testIdPrefix = 'model-select',
-  showProviderSelector = true,
 }: ModelSelectorProps) {
-  const normalizedSelectedModel = resolveModelString(selectedModel);
-  const inferProvider = (): ModelProvider => {
-    if (CODEX_MODELS.some((model) => resolveModelString(model.id) === normalizedSelectedModel)) {
-      return 'codex';
-    }
-    if (OPENCODE_MODELS.some((model) => resolveModelString(model.id) === normalizedSelectedModel)) {
-      return 'opencode';
-    }
-    if (CURSOR_MODELS.some((model) => resolveModelString(model.id) === normalizedSelectedModel)) {
-      return 'cursor';
-    }
-    if (CLAUDE_MODELS.some((model) => resolveModelString(model.id) === normalizedSelectedModel)) {
-      return 'claude';
-    }
+  const { enabledCursorModels, cursorDefaultModel } = useAppStore();
+  const { cursorCliStatus, codexCliStatus } = useSetupStore();
 
-    const lowerModel = normalizedSelectedModel.toLowerCase?.() ?? '';
-    if (lowerModel.startsWith('gpt-') || /^o\d/.test(lowerModel)) {
-      return 'codex';
+  const selectedProvider = getModelProvider(selectedModel);
+
+  // Check if Cursor CLI is available
+  const isCursorAvailable = cursorCliStatus?.installed && cursorCliStatus?.auth?.authenticated;
+
+  // Check if Codex CLI is available
+  const isCodexAvailable = codexCliStatus?.installed && codexCliStatus?.auth?.authenticated;
+
+  // Filter Cursor models based on enabled models from global settings
+  const filteredCursorModels = CURSOR_MODELS.filter((model) => {
+    // Extract the cursor model ID from the prefixed ID (e.g., "cursor-auto" -> "auto")
+    const cursorModelId = stripProviderPrefix(model.id);
+    return enabledCursorModels.includes(cursorModelId as any);
+  });
+
+  const handleProviderChange = (provider: ModelProvider) => {
+    if (provider === 'cursor' && selectedProvider !== 'cursor') {
+      // Switch to Cursor's default model (from global settings)
+      onModelSelect(`${PROVIDER_PREFIXES.cursor}${cursorDefaultModel}`);
+    } else if (provider === 'codex' && selectedProvider !== 'codex') {
+      // Switch to Codex's default model (codex-gpt-5.2-codex)
+      onModelSelect('codex-gpt-5.2-codex');
+    } else if (provider === 'claude' && selectedProvider !== 'claude') {
+      // Switch to Claude's default model
+      onModelSelect('sonnet');
     }
-    if (lowerModel.startsWith('glm') || lowerModel === 'opencode') {
-      return 'opencode';
-    }
-    if (lowerModel === 'auto' || lowerModel.startsWith('cursor-')) {
-      return 'cursor';
-    }
-    return 'claude';
   };
-
-  const resolvedProvider = selectedProvider ?? inferProvider();
-
-  const providerMeta: Record<
-    ModelProvider,
-    { models: ModelOption[]; icon: typeof Brain; label: string; tag: string }
-  > = {
-    cursor: { models: CURSOR_MODELS, icon: Wand2, label: 'Cursor (CLI)', tag: 'CLI' },
-    codex: { models: CODEX_MODELS, icon: Terminal, label: 'Codex (CLI)', tag: 'CLI' },
-    claude: { models: CLAUDE_MODELS, icon: Brain, label: 'Claude (SDK)', tag: 'SDK' },
-    opencode: { models: OPENCODE_MODELS, icon: Code2, label: 'OpenCode (CLI)', tag: 'CLI' },
-  };
-
-  const {
-    models,
-    icon: ProviderIcon,
-    label: providerLabel,
-    tag: providerTag,
-  } = providerMeta[resolvedProvider];
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {/* Provider Selection */}
-      {showProviderSelector && (
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 mb-2">
+      <div className="space-y-2">
+        <Label>AI Provider</Label>
+        <div className="flex gap-2">
           <button
             type="button"
-            onClick={() => {
-              onProviderSelect?.('cursor');
-              onModelSelect(resolveModelString('auto') as AgentModel);
-            }}
+            onClick={() => handleProviderChange('claude')}
             className={cn(
-              'flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md border text-sm font-medium transition-colors',
-              resolvedProvider === 'cursor'
+              'flex-1 px-3 py-2 rounded-md border text-sm font-medium transition-colors flex items-center justify-center gap-2',
+              selectedProvider === 'claude'
                 ? 'bg-primary text-primary-foreground border-primary'
-                : 'bg-background hover:bg-accent border-input'
-            )}
-            data-testid={`${testIdPrefix}-provider-cursor`}
-          >
-            <Wand2 className="w-4 h-4" />
-            Cursor
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              onProviderSelect?.('codex');
-              onModelSelect(resolveModelString('gpt-5.2-codex') as AgentModel);
-            }}
-            className={cn(
-              'flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md border text-sm font-medium transition-colors',
-              resolvedProvider === 'codex'
-                ? 'bg-primary text-primary-foreground border-primary'
-                : 'bg-background hover:bg-accent border-input'
-            )}
-            data-testid={`${testIdPrefix}-provider-codex`}
-          >
-            <Terminal className="w-4 h-4" />
-            Codex
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              onProviderSelect?.('opencode');
-              onModelSelect(resolveModelString('glm4.7') as AgentModel);
-            }}
-            className={cn(
-              'flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md border text-sm font-medium transition-colors',
-              resolvedProvider === 'opencode'
-                ? 'bg-primary text-primary-foreground border-primary'
-                : 'bg-background hover:bg-accent border-input'
-            )}
-            data-testid={`${testIdPrefix}-provider-opencode`}
-          >
-            <Code2 className="w-4 h-4" />
-            OpenCode
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              onProviderSelect?.('claude');
-              onModelSelect(resolveModelString('opus') as AgentModel);
-            }}
-            className={cn(
-              'flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md border text-sm font-medium transition-colors',
-              resolvedProvider === 'claude'
-                ? 'bg-primary text-primary-foreground border-primary'
-                : 'bg-background hover:bg-accent border-input'
+                : 'bg-background hover:bg-accent border-border'
             )}
             data-testid={`${testIdPrefix}-provider-claude`}
           >
-            <Brain className="w-4 h-4" />
+            <AnthropicIcon className="w-4 h-4" />
             Claude
           </button>
+          <button
+            type="button"
+            onClick={() => handleProviderChange('cursor')}
+            className={cn(
+              'flex-1 px-3 py-2 rounded-md border text-sm font-medium transition-colors flex items-center justify-center gap-2',
+              selectedProvider === 'cursor'
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'bg-background hover:bg-accent border-border'
+            )}
+            data-testid={`${testIdPrefix}-provider-cursor`}
+          >
+            <CursorIcon className="w-4 h-4" />
+            Cursor CLI
+          </button>
+          <button
+            type="button"
+            onClick={() => handleProviderChange('codex')}
+            className={cn(
+              'flex-1 px-3 py-2 rounded-md border text-sm font-medium transition-colors flex items-center justify-center gap-2',
+              selectedProvider === 'codex'
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'bg-background hover:bg-accent border-border'
+            )}
+            data-testid={`${testIdPrefix}-provider-codex`}
+          >
+            <OpenAIIcon className="w-4 h-4" />
+            Codex CLI
+          </button>
+        </div>
+      </div>
+
+      {/* Claude Models */}
+      {selectedProvider === 'claude' && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <Label className="flex items-center gap-2">
+              <Brain className="w-4 h-4 text-primary" />
+              Claude Model
+            </Label>
+            <span className="text-[11px] px-2 py-0.5 rounded-full border border-primary/40 text-primary">
+              Native SDK
+            </span>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            {CLAUDE_MODELS.map((option) => {
+              const isSelected = selectedModel === option.id;
+              const shortName = option.label.replace('Claude ', '');
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => onModelSelect(option.id)}
+                  title={option.description}
+                  className={cn(
+                    'flex-1 min-w-[80px] px-3 py-2 rounded-md border text-sm font-medium transition-colors',
+                    isSelected
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-background hover:bg-accent border-input'
+                  )}
+                  data-testid={`${testIdPrefix}-${option.id}`}
+                >
+                  {shortName}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 
-      {/* Model Selection */}
-      <div className="flex items-center justify-between">
-        <Label className="flex items-center gap-2">
-          <ProviderIcon className="w-4 h-4 text-primary" />
-          {providerLabel}
-        </Label>
-        <span className="text-[11px] px-2 py-0.5 rounded-full border border-primary/40 text-primary">
-          {providerTag}
-        </span>
-      </div>
-      <div className="flex gap-2 flex-wrap">
-        {models.map((option) => {
-          const resolvedOptionId = resolveModelString(option.id);
-          const isSelected = normalizedSelectedModel === resolvedOptionId;
-          const shortName = option.label.replace('Claude ', '').replace('Cursor ', '');
-          return (
-            <button
-              key={option.id}
-              type="button"
-              onClick={() => onModelSelect(resolvedOptionId as AgentModel)}
-              title={option.description}
-              className={cn(
-                'flex-1 min-w-[80px] px-3 py-2 rounded-md border text-sm font-medium transition-colors',
-                isSelected
-                  ? 'bg-primary text-primary-foreground border-primary'
-                  : 'bg-background hover:bg-accent border-input'
-              )}
-              data-testid={`${testIdPrefix}-${option.id}`}
-            >
-              {shortName}
-            </button>
-          );
-        })}
-      </div>
+      {/* Cursor Models */}
+      {selectedProvider === 'cursor' && (
+        <div className="space-y-3">
+          {/* Warning when Cursor CLI is not available */}
+          {!isCursorAvailable && (
+            <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+              <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+              <div className="text-sm text-amber-400">
+                Cursor CLI is not installed or authenticated. Configure it in Settings → AI
+                Providers.
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between">
+            <Label className="flex items-center gap-2">
+              <CursorIcon className="w-4 h-4 text-primary" />
+              Cursor Model
+            </Label>
+            <span className="text-[11px] px-2 py-0.5 rounded-full border border-amber-500/40 text-amber-600 dark:text-amber-400">
+              CLI
+            </span>
+          </div>
+          <div className="flex flex-col gap-2">
+            {filteredCursorModels.length === 0 ? (
+              <div className="text-sm text-muted-foreground p-3 border border-dashed rounded-md text-center">
+                No Cursor models enabled. Enable models in Settings → AI Providers.
+              </div>
+            ) : (
+              filteredCursorModels.map((option) => {
+                const isSelected = selectedModel === option.id;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => onModelSelect(option.id)}
+                    title={option.description}
+                    className={cn(
+                      'w-full px-3 py-2 rounded-md border text-sm font-medium transition-colors flex items-center justify-between',
+                      isSelected
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-background hover:bg-accent border-border'
+                    )}
+                    data-testid={`${testIdPrefix}-${option.id}`}
+                  >
+                    <span>{option.label}</span>
+                    <div className="flex gap-1">
+                      {option.hasThinking && (
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            'text-xs',
+                            isSelected
+                              ? 'border-primary-foreground/50 text-primary-foreground'
+                              : 'border-amber-500/50 text-amber-600 dark:text-amber-400'
+                          )}
+                        >
+                          Thinking
+                        </Badge>
+                      )}
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Codex Models */}
+      {selectedProvider === 'codex' && (
+        <div className="space-y-3">
+          {/* Warning when Codex CLI is not available */}
+          {!isCodexAvailable && (
+            <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+              <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+              <div className="text-sm text-amber-400">
+                Codex CLI is not installed or authenticated. Configure it in Settings → AI
+                Providers.
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between">
+            <Label className="flex items-center gap-2">
+              <OpenAIIcon className="w-4 h-4 text-primary" />
+              Codex Model
+            </Label>
+            <span className="text-[11px] px-2 py-0.5 rounded-full border border-emerald-500/40 text-emerald-600 dark:text-emerald-400">
+              CLI
+            </span>
+          </div>
+          <div className="flex flex-col gap-2">
+            {CODEX_MODELS.map((option) => {
+              const isSelected = selectedModel === option.id;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => onModelSelect(option.id)}
+                  title={option.description}
+                  className={cn(
+                    'w-full px-3 py-2 rounded-md border text-sm font-medium transition-colors flex items-center justify-between',
+                    isSelected
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-background hover:bg-accent border-border'
+                  )}
+                  data-testid={`${testIdPrefix}-${option.id}`}
+                >
+                  <span>{option.label}</span>
+                  {option.badge && (
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        'text-xs',
+                        isSelected
+                          ? 'border-primary-foreground/50 text-primary-foreground'
+                          : 'border-muted-foreground/50 text-muted-foreground'
+                      )}
+                    >
+                      {option.badge}
+                    </Badge>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

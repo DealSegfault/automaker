@@ -1,23 +1,27 @@
 /**
  * Generate features from existing app_spec.txt
+ *
+ * Model is configurable via phaseModels.featureGenerationModel in settings
+ * (defaults to Sonnet for balanced speed and quality).
  */
 
+import { query } from '@anthropic-ai/claude-agent-sdk';
 import * as secureFs from '../../lib/secure-fs.js';
 import type { EventEmitter } from '../../lib/events.js';
 import { createLogger } from '@automaker/utils';
-import { createFeatureGenerationOptions, getModelForUseCase } from '../../lib/sdk-options.js';
+import { DEFAULT_PHASE_MODELS, isCursorModel, stripProviderPrefix } from '@automaker/types';
+import { resolvePhaseModel } from '@automaker/model-resolver';
+import { createFeatureGenerationOptions } from '../../lib/sdk-options.js';
+import { ProviderFactory } from '../../providers/provider-factory.js';
 import { logAuthStatus } from './common.js';
 import { parseAndCreateFeatures } from './parse-and-create-features.js';
 import { getAppSpecPath } from '@automaker/platform';
 import type { SettingsService } from '../../services/settings-service.js';
 import { getAutoLoadClaudeMdSetting } from '../../lib/settings-helpers.js';
-import { ProviderFactory } from '../../providers/provider-factory.js';
-import { DEFAULT_MODELS, type ExecuteOptions } from '@automaker/types';
 
 const logger = createLogger('SpecRegeneration');
 
 const DEFAULT_MAX_FEATURES = 50;
-const FEATURE_GENERATION_TIMEOUT_MS = 10 * 60 * 1000;
 
 export async function generateFeaturesFromSpec(
   projectPath: string,
@@ -96,86 +100,51 @@ IMPORTANT: Do not ask for clarification. The specification is provided above. Ge
     projectPath: projectPath,
   });
 
+  // Load autoLoadClaudeMd setting
   const autoLoadClaudeMd = await getAutoLoadClaudeMdSetting(
     projectPath,
     settingsService,
-    '[SpecFeatures]'
+    '[FeatureGeneration]'
   );
 
-  const hasModelOverride = !!(
-    process.env.AUTOMAKER_MODEL_FEATURES || process.env.AUTOMAKER_MODEL_DEFAULT
-  );
-  let featureModel = getModelForUseCase('features');
-  if (!hasModelOverride) {
-    const defaultProvider = ProviderFactory.getDefaultProvider();
-    if (defaultProvider !== 'claude') {
-      featureModel = DEFAULT_MODELS[defaultProvider] || DEFAULT_MODELS.claude;
-    }
-  }
+  // Get model from phase settings
+  const settings = await settingsService?.getGlobalSettings();
+  const phaseModelEntry =
+    settings?.phaseModels?.featureGenerationModel || DEFAULT_PHASE_MODELS.featureGenerationModel;
+  const { model, thinkingLevel } = resolvePhaseModel(phaseModelEntry);
 
-  const options = createFeatureGenerationOptions({
-    cwd: projectPath,
-    abortController,
-    autoLoadClaudeMd,
-    model: featureModel,
-  });
-
-  logger.debug('SDK Options:', JSON.stringify(options, null, 2));
-
-  const effectiveModel = options.model ?? featureModel;
-  const provider = ProviderFactory.getProviderForModel(effectiveModel);
-  const providerName = provider.getName();
-
-  logger.info(`Starting feature generation with provider: ${providerName}`);
-
-  if (providerName === 'claude') {
-    logAuthStatus('Right before SDK query() for features');
-  }
-
-  const streamOptions: ExecuteOptions = {
-    prompt,
-    model: effectiveModel,
-    cwd: projectPath,
-    maxTurns: options.maxTurns,
-    allowedTools: options.allowedTools as string[] | undefined,
-    abortController,
-  };
-
-  if (providerName === 'codex') {
-    streamOptions.timeoutMs = FEATURE_GENERATION_TIMEOUT_MS;
-  }
-
-  if (providerName === 'claude') {
-    streamOptions.systemPrompt = options.systemPrompt;
-    streamOptions.settingSources = options.settingSources;
-  } else if (typeof options.systemPrompt === 'string') {
-    streamOptions.systemPrompt = options.systemPrompt;
-  }
-
-  let stream;
-  try {
-    stream = provider.executeQuery(streamOptions);
-    logger.debug('executeQuery() returned stream successfully');
-  } catch (queryError) {
-    logger.error('❌ executeQuery() threw an exception:');
-    logger.error('Error:', queryError);
-    throw queryError;
-  }
+  logger.info('Using model:', model);
 
   let responseText = '';
   let messageCount = 0;
 
-  logger.debug('Starting to iterate over feature stream...');
+  // Route to appropriate provider based on model type
+  if (isCursorModel(model)) {
+    // Use Cursor provider for Cursor models
+    logger.info('[FeatureGeneration] Using Cursor provider');
 
-  let streamError: Error | null = null;
+    const provider = ProviderFactory.getProviderForModel(model);
+    // Strip provider prefix - providers expect bare model IDs
+    const bareModel = stripProviderPrefix(model);
 
-  try {
-    for await (const msg of stream) {
+    // Add explicit instructions for Cursor to return JSON in response
+    const cursorPrompt = `${prompt}
+
+CRITICAL INSTRUCTIONS:
+1. DO NOT write any files. Return the JSON in your response only.
+2. Respond with ONLY a JSON object - no explanations, no markdown, just raw JSON.
+3. Your entire response should be valid JSON starting with { and ending with }. No text before or after.`;
+
+    for await (const msg of provider.executeQuery({
+      prompt: cursorPrompt,
+      model: bareModel,
+      cwd: projectPath,
+      maxTurns: 250,
+      allowedTools: ['Read', 'Glob', 'Grep'],
+      abortController,
+      readOnly: true, // Feature generation only reads code, doesn't write
+    })) {
       messageCount++;
-      logger.debug(
-        `Feature stream message #${messageCount}:`,
-        JSON.stringify({ type: msg.type, subtype: (msg as any).subtype }, null, 2)
-      );
 
       if (msg.type === 'assistant' && msg.message?.content) {
         for (const block of msg.message.content) {
@@ -189,28 +158,75 @@ IMPORTANT: Do not ask for clarification. The specification is provided above. Ge
             });
           }
         }
-      } else if (msg.type === 'result' && msg.subtype === 'success') {
-        logger.debug('Received success result for features');
-        responseText = msg.result || responseText;
-      } else if (msg.type === 'result' && msg.subtype === 'error') {
-        streamError = new Error(msg.error || 'Feature generation failed');
-        break;
-      } else if (msg.type === 'error') {
-        streamError = new Error(msg.error || 'Feature generation failed');
-        break;
+      } else if (msg.type === 'result' && msg.subtype === 'success' && msg.result) {
+        // Use result if it's a final accumulated message
+        if (msg.result.length > responseText.length) {
+          responseText = msg.result;
+        }
       }
     }
-  } catch (error) {
-    streamError = error as Error;
-  }
+  } else {
+    // Use Claude SDK for Claude models
+    logger.info('[FeatureGeneration] Using Claude SDK');
 
-  if (streamError) {
-    logger.error('❌ Error while iterating feature stream:');
-    logger.error('Stream error:', streamError);
-    if (!responseText.trim()) {
+    const options = createFeatureGenerationOptions({
+      cwd: projectPath,
+      abortController,
+      autoLoadClaudeMd,
+      model,
+      thinkingLevel, // Pass thinking level for extended thinking
+    });
+
+    logger.debug('SDK Options:', JSON.stringify(options, null, 2));
+    logger.info('Calling Claude Agent SDK query() for features...');
+
+    logAuthStatus('Right before SDK query() for features');
+
+    let stream;
+    try {
+      stream = query({ prompt, options });
+      logger.debug('query() returned stream successfully');
+    } catch (queryError) {
+      logger.error('❌ query() threw an exception:');
+      logger.error('Error:', queryError);
+      throw queryError;
+    }
+
+    logger.debug('Starting to iterate over feature stream...');
+
+    try {
+      for await (const msg of stream) {
+        messageCount++;
+        logger.debug(
+          `Feature stream message #${messageCount}:`,
+          JSON.stringify({ type: msg.type, subtype: (msg as any).subtype }, null, 2)
+        );
+
+        if (msg.type === 'assistant' && msg.message.content) {
+          for (const block of msg.message.content) {
+            if (block.type === 'text') {
+              responseText += block.text;
+              logger.debug(`Feature text block received (${block.text.length} chars)`);
+              events.emit('spec-regeneration:event', {
+                type: 'spec_regeneration_progress',
+                content: block.text,
+                projectPath: projectPath,
+              });
+            }
+          }
+        } else if (msg.type === 'result' && (msg as any).subtype === 'success') {
+          logger.debug('Received success result for features');
+          responseText = (msg as any).result || responseText;
+        } else if ((msg as { type: string }).type === 'error') {
+          logger.error('❌ Received error message from feature stream:');
+          logger.error('Error message:', JSON.stringify(msg, null, 2));
+        }
+      }
+    } catch (streamError) {
+      logger.error('❌ Error while iterating feature stream:');
+      logger.error('Stream error:', streamError);
       throw streamError;
     }
-    logger.warn('Continuing with partial feature output after stream error');
   }
 
   logger.info(`Feature stream complete. Total messages: ${messageCount}`);

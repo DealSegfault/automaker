@@ -11,53 +11,70 @@ import { createDeleteApiKeyHandler } from './routes/delete-api-key.js';
 import { createApiKeysHandler } from './routes/api-keys.js';
 import { createPlatformHandler } from './routes/platform.js';
 import { createVerifyClaudeAuthHandler } from './routes/verify-claude-auth.js';
+import { createVerifyCodexAuthHandler } from './routes/verify-codex-auth.js';
 import { createGhStatusHandler } from './routes/gh-status.js';
-// Cursor CLI routes
 import { createCursorStatusHandler } from './routes/cursor-status.js';
-import { createInstallCursorHandler } from './routes/install-cursor.js';
-import { createVerifyCursorAuthHandler } from './routes/verify-cursor-auth.js';
-import { createOpenCodeStatusHandler } from './routes/opencode-status.js';
 import { createCodexStatusHandler } from './routes/codex-status.js';
-// Default provider routes
+import { createInstallCodexHandler } from './routes/install-codex.js';
+import { createAuthCodexHandler } from './routes/auth-codex.js';
+import { createAuthCursorHandler } from './routes/auth-cursor.js';
+import { createDeauthClaudeHandler } from './routes/deauth-claude.js';
+import { createDeauthCodexHandler } from './routes/deauth-codex.js';
+import { createDeauthCursorHandler } from './routes/deauth-cursor.js';
+import { createAuthOpencodeHandler } from './routes/auth-opencode.js';
+import { createDeauthOpencodeHandler } from './routes/deauth-opencode.js';
+import { createOpencodeStatusHandler } from './routes/opencode-status.js';
 import {
-  createGetDefaultProviderHandler,
-  createSetDefaultProviderHandler,
-} from './routes/default-provider.js';
-// Test provider route
-import { createTestProviderHandler } from './routes/test-provider.js';
+  createGetCursorConfigHandler,
+  createSetCursorDefaultModelHandler,
+  createSetCursorModelsHandler,
+  createGetCursorPermissionsHandler,
+  createApplyPermissionProfileHandler,
+  createSetCustomPermissionsHandler,
+  createDeleteProjectPermissionsHandler,
+  createGetExampleConfigHandler,
+} from './routes/cursor-config.js';
 
 export function createSetupRoutes(): Router {
   const router = Router();
 
-  // Claude CLI routes
   router.get('/claude-status', createClaudeStatusHandler());
   router.post('/install-claude', createInstallClaudeHandler());
   router.post('/auth-claude', createAuthClaudeHandler());
-  router.post('/verify-claude-auth', createVerifyClaudeAuthHandler());
-
-  // Cursor CLI routes
-  router.get('/cursor-status', createCursorStatusHandler());
-  router.post('/install-cursor', createInstallCursorHandler());
-  router.post('/verify-cursor-auth', createVerifyCursorAuthHandler());
-
-  // OpenCode CLI routes
-  router.get('/opencode-status', createOpenCodeStatusHandler());
-  // Codex CLI routes
-  router.get('/codex-status', createCodexStatusHandler());
-
-  // Default provider routes
-  router.get('/default-provider', createGetDefaultProviderHandler());
-  router.post('/default-provider', createSetDefaultProviderHandler());
-
-  // Test provider route
-  router.post('/test-provider', createTestProviderHandler());
-
-  // Common routes
+  router.post('/deauth-claude', createDeauthClaudeHandler());
   router.post('/store-api-key', createStoreApiKeyHandler());
   router.post('/delete-api-key', createDeleteApiKeyHandler());
   router.get('/api-keys', createApiKeysHandler());
   router.get('/platform', createPlatformHandler());
+  router.post('/verify-claude-auth', createVerifyClaudeAuthHandler());
+  router.post('/verify-codex-auth', createVerifyCodexAuthHandler());
   router.get('/gh-status', createGhStatusHandler());
+
+  // Cursor CLI routes
+  router.get('/cursor-status', createCursorStatusHandler());
+  router.post('/auth-cursor', createAuthCursorHandler());
+  router.post('/deauth-cursor', createDeauthCursorHandler());
+
+  // Codex CLI routes
+  router.get('/codex-status', createCodexStatusHandler());
+  router.post('/install-codex', createInstallCodexHandler());
+  router.post('/auth-codex', createAuthCodexHandler());
+  router.post('/deauth-codex', createDeauthCodexHandler());
+
+  // OpenCode CLI routes
+  router.get('/opencode-status', createOpencodeStatusHandler());
+  router.post('/auth-opencode', createAuthOpencodeHandler());
+  router.post('/deauth-opencode', createDeauthOpencodeHandler());
+  router.get('/cursor-config', createGetCursorConfigHandler());
+  router.post('/cursor-config/default-model', createSetCursorDefaultModelHandler());
+  router.post('/cursor-config/models', createSetCursorModelsHandler());
+
+  // Cursor CLI Permissions routes
+  router.get('/cursor-permissions', createGetCursorPermissionsHandler());
+  router.post('/cursor-permissions/profile', createApplyPermissionProfileHandler());
+  router.post('/cursor-permissions/custom', createSetCustomPermissionsHandler());
+  router.delete('/cursor-permissions', createDeleteProjectPermissionsHandler());
+  router.get('/cursor-permissions/example', createGetExampleConfigHandler());
 
   return router;
 }

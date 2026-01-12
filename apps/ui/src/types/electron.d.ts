@@ -2,6 +2,8 @@
  * Electron API type definitions
  */
 
+import type { ClaudeUsageResponse, CodexUsageResponse } from '@/store/app-store';
+
 export interface ImageAttachment {
   id?: string; // Optional - may not be present in messages loaded from server
   data: string; // base64 encoded image data
@@ -85,7 +87,8 @@ export interface AgentAPI {
     message: string,
     workingDirectory?: string,
     imagePaths?: string[],
-    model?: string
+    model?: string,
+    thinkingLevel?: string
   ) => Promise<{
     success: boolean;
     error?: string;
@@ -471,6 +474,10 @@ export interface AutoModeAPI {
 }
 
 export interface ElectronAPI {
+  // Platform info (exposed from preload)
+  platform?: 'darwin' | 'win32' | 'linux';
+  isElectron?: boolean;
+
   ping: () => Promise<string>;
   getApiKey?: () => Promise<string | null>;
   quit?: () => Promise<void>;
@@ -590,6 +597,16 @@ export interface ElectronAPI {
     message?: string;
     error?: string;
   }>;
+
+  // Claude Usage API
+  claude: {
+    getUsage: () => Promise<ClaudeUsageResponse>;
+  };
+
+  // Codex Usage API
+  codex: {
+    getUsage: () => Promise<CodexUsageResponse>;
+  };
 
   // Worktree Management APIs
   worktree: WorktreeAPI;

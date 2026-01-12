@@ -4,7 +4,6 @@ import {
   getEffectiveModel,
   CLAUDE_MODEL_MAP,
   CURSOR_MODEL_MAP,
-  CODEX_MODEL_MAP,
   DEFAULT_MODELS,
 } from '@automaker/model-resolver';
 
@@ -38,24 +37,17 @@ describe('model-resolver.ts', () => {
       const result = resolveModelString('opus');
       expect(result).toBe('claude-opus-4-5-20251101');
       expect(consoleSpy.log).toHaveBeenCalledWith(
-        expect.stringContaining('Resolved model alias: "opus"')
+        expect.stringContaining('Resolved Claude model alias: "opus"')
       );
     });
 
     it('should treat unknown models as falling back to default', () => {
-      const models = ['unknown-model', 'mystery-model'];
+      // Note: Don't include valid Cursor model IDs here (e.g., 'gpt-5.2' is in CURSOR_MODEL_MAP)
+      const models = ['o1', 'o1-mini', 'o3', 'unknown-model', 'fake-model-123'];
       models.forEach((model) => {
         const result = resolveModelString(model);
         // Should fall back to default since these aren't supported
         expect(result).toBe(DEFAULT_MODELS.claude);
-      });
-    });
-
-    it('should pass through Codex model strings', () => {
-      const models = ['gpt-5.2', 'gpt-5.1-codex', 'o1'];
-      models.forEach((model) => {
-        const result = resolveModelString(model);
-        expect(result).toBe(model);
       });
     });
 
@@ -68,22 +60,6 @@ describe('model-resolver.ts', () => {
       expect(consoleSpy.log).toHaveBeenCalledWith(
         expect.stringContaining('Using full Claude model string')
       );
-    });
-
-    it('should pass through Cursor model aliases', () => {
-      const models = Object.values(CURSOR_MODEL_MAP);
-      models.forEach((model) => {
-        const result = resolveModelString(model);
-        expect(result).toBe(model);
-      });
-    });
-
-    it('should resolve Codex model aliases', () => {
-      const models = Object.values(CODEX_MODEL_MAP);
-      models.forEach((model) => {
-        const result = resolveModelString(model);
-        expect(result).toBe(model);
-      });
     });
 
     it('should return default model when modelKey is undefined', () => {
@@ -108,6 +84,32 @@ describe('model-resolver.ts', () => {
     it('should handle empty string', () => {
       const result = resolveModelString('');
       expect(result).toBe(DEFAULT_MODELS.claude);
+    });
+
+    describe('Cursor models', () => {
+      it('should pass through cursor-prefixed models unchanged', () => {
+        const result = resolveModelString('cursor-composer-1');
+        expect(result).toBe('cursor-composer-1');
+        expect(consoleSpy.log).toHaveBeenCalledWith(expect.stringContaining('Using Cursor model'));
+      });
+
+      it('should add cursor- prefix to bare Cursor model IDs', () => {
+        const result = resolveModelString('composer-1');
+        expect(result).toBe('cursor-composer-1');
+      });
+
+      it('should handle cursor-auto model', () => {
+        const result = resolveModelString('cursor-auto');
+        expect(result).toBe('cursor-auto');
+      });
+
+      it('should handle all known Cursor model IDs with prefix', () => {
+        const cursorModelIds = Object.keys(CURSOR_MODEL_MAP);
+        cursorModelIds.forEach((modelId) => {
+          const result = resolveModelString(`cursor-${modelId}`);
+          expect(result).toBe(`cursor-${modelId}`);
+        });
+      });
     });
   });
 

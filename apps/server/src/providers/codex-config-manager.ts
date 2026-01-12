@@ -1,158 +1,85 @@
 /**
- * Codex CLI configuration manager for MCP servers
+ * Codex Config Manager - Writes MCP server configuration for Codex CLI
  */
 
-import fs from 'fs/promises';
-import os from 'os';
 import path from 'path';
+import type { McpServerConfig } from '@automaker/types';
+import * as secureFs from '../lib/secure-fs.js';
 
-type McpServerConfig = {
-  command?: string;
-  url?: string;
-  args?: string[];
-  enabled_tools?: string[];
-  enabledTools?: string[];
-  startup_timeout_sec?: number;
-  tool_timeout_sec?: number;
-  env?: Record<string, string>;
-};
+const CODEX_CONFIG_DIR = '.codex';
+const CODEX_CONFIG_FILENAME = 'config.toml';
+const CODEX_MCP_SECTION = 'mcp_servers';
+
+function formatTomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function formatTomlArray(values: string[]): string {
+  const formatted = values.map((value) => formatTomlString(value)).join(', ');
+  return `[${formatted}]`;
+}
+
+function formatTomlInlineTable(values: Record<string, string>): string {
+  const entries = Object.entries(values).map(
+    ([key, value]) => `${key} = ${formatTomlString(value)}`
+  );
+  return `{ ${entries.join(', ')} }`;
+}
+
+function formatTomlKey(key: string): string {
+  return `"${key.replace(/"/g, '\\"')}"`;
+}
+
+function buildServerBlock(name: string, server: McpServerConfig): string[] {
+  const lines: string[] = [];
+  const section = `${CODEX_MCP_SECTION}.${formatTomlKey(name)}`;
+  lines.push(`[${section}]`);
+
+  if (server.type) {
+    lines.push(`type = ${formatTomlString(server.type)}`);
+  }
+
+  if ('command' in server && server.command) {
+    lines.push(`command = ${formatTomlString(server.command)}`);
+  }
+
+  if ('args' in server && server.args && server.args.length > 0) {
+    lines.push(`args = ${formatTomlArray(server.args)}`);
+  }
+
+  if ('env' in server && server.env && Object.keys(server.env).length > 0) {
+    lines.push(`env = ${formatTomlInlineTable(server.env)}`);
+  }
+
+  if ('url' in server && server.url) {
+    lines.push(`url = ${formatTomlString(server.url)}`);
+  }
+
+  if ('headers' in server && server.headers && Object.keys(server.headers).length > 0) {
+    lines.push(`headers = ${formatTomlInlineTable(server.headers)}`);
+  }
+
+  return lines;
+}
 
 export class CodexConfigManager {
   async configureMcpServers(
-    _cwd: string,
-    mcpServers: Record<string, unknown>
-  ): Promise<string | null> {
-    if (!mcpServers || Object.keys(mcpServers).length === 0) {
-      return null;
+    cwd: string,
+    mcpServers: Record<string, McpServerConfig>
+  ): Promise<void> {
+    const configDir = path.join(cwd, CODEX_CONFIG_DIR);
+    const configPath = path.join(configDir, CODEX_CONFIG_FILENAME);
+
+    await secureFs.mkdir(configDir, { recursive: true });
+
+    const blocks: string[] = [];
+    for (const [name, server] of Object.entries(mcpServers)) {
+      blocks.push(...buildServerBlock(name, server), '');
     }
 
-    const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
-    const configDir = codexHome;
-    const configPath = path.join(configDir, 'config.toml');
-
-    await fs.mkdir(configDir, { recursive: true });
-
-    let existing = '';
-    try {
-      existing = await fs.readFile(configPath, 'utf-8');
-    } catch {
-      existing = '';
+    const content = blocks.join('\n').trim();
+    if (content) {
+      await secureFs.writeFile(configPath, content + '\n', 'utf-8');
     }
-
-    const merged = this.mergeConfig(existing, mcpServers);
-    await fs.writeFile(configPath, merged, 'utf-8');
-
-    return configPath;
-  }
-
-  private mergeConfig(existing: string, mcpServers: Record<string, unknown>): string {
-    let content = existing.trim();
-
-    for (const [name, value] of Object.entries(mcpServers)) {
-      if (!name || typeof name !== 'string') {
-        continue;
-      }
-
-      if (this.hasServerBlock(content, name)) {
-        continue;
-      }
-
-      const block = this.renderServerBlock(name, value as McpServerConfig);
-      if (block) {
-        content = `${content}\n\n${block}`.trim();
-      }
-    }
-
-    return `${content.trim()}\n`;
-  }
-
-  private renderServerBlock(name: string, config: McpServerConfig): string | null {
-    if (!config || typeof config !== 'object') {
-      return null;
-    }
-
-    const command = typeof config.command === 'string' ? config.command : undefined;
-    const url = typeof config.url === 'string' ? config.url : undefined;
-    if (!command && !url) {
-      return null;
-    }
-
-    const args = Array.isArray(config.args) ? config.args : [];
-    const enabledTools = Array.isArray(config.enabled_tools)
-      ? config.enabled_tools
-      : Array.isArray(config.enabledTools)
-        ? config.enabledTools
-        : [];
-    const startupTimeout = Number.isFinite(config.startup_timeout_sec)
-      ? config.startup_timeout_sec
-      : undefined;
-    const toolTimeout = Number.isFinite(config.tool_timeout_sec)
-      ? config.tool_timeout_sec
-      : undefined;
-
-    const lines = [`[mcp_servers.${name}]`];
-
-    if (command) {
-      lines.push(`command = ${this.formatValue(command)}`);
-    }
-    if (url) {
-      lines.push(`url = ${this.formatValue(url)}`);
-    }
-
-    if (args.length > 0) {
-      lines.push(`args = ${this.formatValue(args)}`);
-    }
-    if (enabledTools.length > 0) {
-      lines.push(`enabled_tools = ${this.formatValue(enabledTools)}`);
-    }
-    if (startupTimeout !== undefined) {
-      lines.push(`startup_timeout_sec = ${this.formatValue(startupTimeout)}`);
-    }
-    if (toolTimeout !== undefined) {
-      lines.push(`tool_timeout_sec = ${this.formatValue(toolTimeout)}`);
-    }
-
-    if (config.env && typeof config.env === 'object') {
-      const envEntries = Object.entries(config.env);
-      if (envEntries.length > 0) {
-        lines.push('', `[mcp_servers.${name}.env]`);
-        for (const [key, value] of envEntries) {
-          lines.push(`${this.formatKey(key)} = ${this.formatValue(value)}`);
-        }
-      }
-    }
-
-    return lines.join('\n');
-  }
-
-  private formatValue(value: unknown): string {
-    if (Array.isArray(value)) {
-      const items = value.map((item) => this.formatValue(item));
-      return `[${items.join(', ')}]`;
-    }
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return String(value);
-    }
-    if (typeof value === 'boolean') {
-      return value ? 'true' : 'false';
-    }
-    if (typeof value === 'string') {
-      const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      return `"${escaped}"`;
-    }
-    return '""';
-  }
-
-  private formatKey(key: string): string {
-    if (/^[A-Za-z0-9_-]+$/.test(key)) {
-      return key;
-    }
-    return this.formatValue(key);
-  }
-
-  private hasServerBlock(content: string, name: string): boolean {
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const headerRegex = new RegExp(`^\\[mcp_servers\\.${escaped}\\]$`, 'm');
-    return headerRegex.test(content);
   }
 }

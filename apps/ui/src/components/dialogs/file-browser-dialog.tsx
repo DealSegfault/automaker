@@ -10,9 +10,11 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { PathInput } from '@/components/ui/path-input';
-import { apiPost } from '@/lib/api-fetch';
-import { getJSON, setJSON } from '@/lib/storage';
+import { Kbd, KbdGroup } from '@/components/ui/kbd';
 import { getDefaultWorkspaceDirectory, saveLastProjectDirectory } from '@/lib/workspace-config';
+import { useOSDetection } from '@/hooks';
+import { apiPost } from '@/lib/api-fetch';
+import { useAppStore } from '@/store/app-store';
 
 interface DirectoryEntry {
   name: string;
@@ -38,27 +40,7 @@ interface FileBrowserDialogProps {
   initialPath?: string;
 }
 
-const RECENT_FOLDERS_KEY = 'file-browser-recent-folders';
 const MAX_RECENT_FOLDERS = 5;
-
-function getRecentFolders(): string[] {
-  return getJSON<string[]>(RECENT_FOLDERS_KEY) ?? [];
-}
-
-function addRecentFolder(path: string): void {
-  const recent = getRecentFolders();
-  // Remove if already exists, then add to front
-  const filtered = recent.filter((p) => p !== path);
-  const updated = [path, ...filtered].slice(0, MAX_RECENT_FOLDERS);
-  setJSON(RECENT_FOLDERS_KEY, updated);
-}
-
-function removeRecentFolder(path: string): string[] {
-  const recent = getRecentFolders();
-  const updated = recent.filter((p) => p !== path);
-  setJSON(RECENT_FOLDERS_KEY, updated);
-  return updated;
-}
 
 export function FileBrowserDialog({
   open,
@@ -68,6 +50,7 @@ export function FileBrowserDialog({
   description = 'Navigate to your project folder or paste a path directly',
   initialPath,
 }: FileBrowserDialogProps) {
+  const { isMac } = useOSDetection();
   const [currentPath, setCurrentPath] = useState<string>('');
   const [parentPath, setParentPath] = useState<string | null>(null);
   const [directories, setDirectories] = useState<DirectoryEntry[]>([]);
@@ -75,28 +58,20 @@ export function FileBrowserDialog({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [warning, setWarning] = useState('');
-  const [recentFolders, setRecentFolders] = useState<string[]>([]);
-  const isMac =
-    typeof navigator !== 'undefined' &&
-    (
-      (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData
-        ?.platform ??
-      navigator.platform ??
-      ''
-    ).includes('Mac');
 
-  // Load recent folders when dialog opens
-  useEffect(() => {
-    if (open) {
-      setRecentFolders(getRecentFolders());
-    }
-  }, [open]);
+  // Use recent folders from app store (synced via API)
+  const recentFolders = useAppStore((s) => s.recentFolders);
+  const setRecentFolders = useAppStore((s) => s.setRecentFolders);
+  const addRecentFolder = useAppStore((s) => s.addRecentFolder);
 
-  const handleRemoveRecent = useCallback((e: React.MouseEvent, path: string) => {
-    e.stopPropagation();
-    const updated = removeRecentFolder(path);
-    setRecentFolders(updated);
-  }, []);
+  const handleRemoveRecent = useCallback(
+    (e: React.MouseEvent, path: string) => {
+      e.stopPropagation();
+      const updated = recentFolders.filter((p) => p !== path);
+      setRecentFolders(updated);
+    },
+    [recentFolders, setRecentFolders]
+  );
 
   const browseDirectory = useCallback(async (dirPath?: string) => {
     setLoading(true);
@@ -232,7 +207,7 @@ export function FileBrowserDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-popover border-border max-w-3xl max-h-[85vh] overflow-hidden flex flex-col p-4">
+      <DialogContent className="bg-popover border-border max-w-3xl max-h-[85vh] overflow-hidden flex flex-col p-4 focus:outline-none focus-visible:outline-none">
         <DialogHeader className="pb-1">
           <DialogTitle className="flex items-center gap-2 text-base">
             <FolderOpen className="w-4 h-4 text-brand-500" />
@@ -252,6 +227,12 @@ export function FileBrowserDialog({
             error={!!error}
             onNavigate={handleNavigate}
             onHome={handleGoHome}
+            entries={directories.map((dir) => ({ ...dir, isDirectory: true }))}
+            onSelectEntry={(entry) => {
+              if (entry.isDirectory) {
+                handleSelectDirectory(entry);
+              }
+            }}
           />
 
           {/* Recent folders */}
@@ -366,10 +347,10 @@ export function FileBrowserDialog({
           >
             <FolderOpen className="w-3.5 h-3.5 mr-1.5" />
             Select Current Folder
-            <kbd className="ml-2 px-1.5 py-0.5 text-[10px] bg-background/50 rounded border border-border">
-              {isMac ? '⌘' : 'Ctrl'}
-              +↵
-            </kbd>
+            <KbdGroup className="ml-1">
+              <Kbd>{isMac ? '⌘' : 'Ctrl'}</Kbd>
+              <Kbd>↵</Kbd>
+            </KbdGroup>
           </Button>
         </DialogFooter>
       </DialogContent>
