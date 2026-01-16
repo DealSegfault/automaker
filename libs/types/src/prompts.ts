@@ -101,6 +101,19 @@ export interface EnhancementPrompts {
 
   /** System prompt for "acceptance" mode (add acceptance criteria) */
   acceptanceSystemPrompt?: CustomPrompt;
+
+  /** System prompt for "ux-reviewer" mode (UX and design perspective) */
+  uxReviewerSystemPrompt?: CustomPrompt;
+}
+
+/**
+ * CommitMessagePrompts - Customizable prompts for AI commit message generation
+ *
+ * Controls how the AI generates git commit messages from diffs.
+ */
+export interface CommitMessagePrompts {
+  /** System prompt for generating commit messages */
+  systemPrompt?: CustomPrompt;
 }
 
 /**
@@ -121,6 +134,9 @@ export interface PromptCustomization {
 
   /** Enhancement prompts (feature description improvement) */
   enhancement?: EnhancementPrompts;
+
+  /** Commit message prompts (AI-generated commit messages) */
+  commitMessage?: CommitMessagePrompts;
 }
 
 /**
@@ -131,6 +147,7 @@ export const DEFAULT_PROMPT_CUSTOMIZATION: PromptCustomization = {
   agent: {},
   backlogPlan: {},
   enhancement: {},
+  commitMessage: {},
 };
 
 /**
@@ -166,4 +183,9 @@ export interface ResolvedEnhancementPrompts {
   technicalSystemPrompt: string;
   simplifySystemPrompt: string;
   acceptanceSystemPrompt: string;
+  uxReviewerSystemPrompt: string;
+}
+
+export interface ResolvedCommitMessagePrompts {
+  systemPrompt: string;
 }

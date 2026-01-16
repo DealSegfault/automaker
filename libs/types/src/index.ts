@@ -30,6 +30,20 @@ export type {
 } from './codex.js';
 export * from './codex-models.js';
 
+// Codex App-Server JSON-RPC types
+export type {
+  AppServerModelResponse,
+  AppServerModel,
+  AppServerReasoningEffort,
+  AppServerAccountResponse,
+  AppServerAccount,
+  AppServerRateLimitsResponse,
+  AppServerRateLimits,
+  AppServerRateLimitWindow,
+  JsonRpcRequest,
+  JsonRpcResponse,
+} from './codex-app-server.js';
+
 // Feature types
 export type {
   Feature,
@@ -90,6 +104,7 @@ export {
   type ModelAlias,
   type CodexModelId,
   type AgentModel,
+  type ModelId,
 } from './model.js';
 
 // Event types
@@ -109,18 +124,19 @@ export type {
   AgentPrompts,
   BacklogPlanPrompts,
   EnhancementPrompts,
+  CommitMessagePrompts,
   PromptCustomization,
   ResolvedAutoModePrompts,
   ResolvedAgentPrompts,
   ResolvedBacklogPlanPrompts,
   ResolvedEnhancementPrompts,
+  ResolvedCommitMessagePrompts,
 } from './prompts.js';
 export { DEFAULT_PROMPT_CUSTOMIZATION } from './prompts.js';
 
 // Settings types and constants
 export type {
   ThemeMode,
-  KanbanCardDetailLevel,
   PlanningMode,
   ThinkingLevel,
   ModelProvider,
@@ -128,7 +144,6 @@ export type {
   PhaseModelConfig,
   PhaseModelKey,
   KeyboardShortcuts,
-  AIProfile,
   MCPToolInfo,
   MCPServerConfig,
   ProjectRef,
@@ -150,8 +165,6 @@ export {
   CREDENTIALS_VERSION,
   PROJECT_SETTINGS_VERSION,
   THINKING_TOKEN_BUDGET,
-  profileHasThinking,
-  getProfileModelString,
   getThinkingTokenBudget,
 } from './settings.js';
 
@@ -228,6 +241,9 @@ export type {
 
 // Port configuration
 export { STATIC_PORT, SERVER_PORT, RESERVED_PORTS } from './ports.js';
+
+// Editor types
+export type { EditorInfo } from './editor.js';
 
 // Ideation types
 export type {
