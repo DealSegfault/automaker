@@ -25,6 +25,7 @@ import type {
   CreateIdeaInput,
   UpdateIdeaInput,
   ConvertToFeatureOptions,
+  AutoModeMetricsSnapshot,
 } from '@automaker/types';
 import { getJSON, setJSON, removeItem } from './storage';
 
@@ -532,6 +533,9 @@ export interface AutoModeAPI {
     editedPlan?: string,
     feedback?: string
   ) => Promise<{ success: boolean; error?: string }>;
+  metrics: (
+    projectPath: string
+  ) => Promise<{ success: boolean; metrics?: AutoModeMetricsSnapshot; error?: string }>;
   onEvent: (callback: (event: AutoModeEvent) => void) => () => void;
 }
 
@@ -2053,6 +2057,42 @@ function createMockAutoModeAPI(): AutoModeAPI {
         feedback,
       });
       return { success: true };
+    },
+
+    metrics: async (_projectPath: string) => {
+      const mockMetrics: AutoModeMetricsSnapshot = {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        summary: {
+          totalRuns: 3,
+          successRate: 0.67,
+          revisionRate: 0.33,
+          averageDurationMs: 42000,
+          averageDurationByComplexity: {
+            low: 18000,
+            medium: 52000,
+          },
+          tokenEfficiency: 1.8,
+          utilization: 0.4,
+          bottleneck: 'execution',
+        },
+        runs: [
+          {
+            runId: 'mock-run-1',
+            featureId: 'auto-mode-0',
+            title: 'Mock feature run',
+            startedAt: new Date(Date.now() - 60000).toISOString(),
+            completedAt: new Date(Date.now() - 20000).toISOString(),
+            durationMs: 40000,
+            status: 'success',
+            complexity: 'medium',
+            attempts: 1,
+            revisions: 0,
+          },
+        ],
+      };
+
+      return { success: true, metrics: mockMetrics };
     },
 
     onEvent: (callback: (event: AutoModeEvent) => void) => {

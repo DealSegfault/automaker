@@ -5,7 +5,16 @@ import { createLogger } from '@automaker/utils/logger';
 import { cn } from '@/lib/utils';
 
 const logger = createLogger('TaskProgressPanel');
-import { Check, Loader2, Circle, ChevronDown, ChevronRight, FileCode } from 'lucide-react';
+import {
+  Check,
+  Loader2,
+  Circle,
+  ChevronDown,
+  ChevronRight,
+  FileCode,
+  AlertTriangle,
+  XCircle,
+} from 'lucide-react';
 import { getElectronAPI } from '@/lib/electron';
 import type { AutoModeEvent } from '@/types/electron';
 import { Badge } from '@/components/ui/badge';
@@ -13,7 +22,7 @@ import { Badge } from '@/components/ui/badge';
 interface TaskInfo {
   id: string;
   description: string;
-  status: 'pending' | 'in_progress' | 'completed';
+  status: 'pending' | 'in_progress' | 'completed' | 'blocked' | 'failed';
   filePath?: string;
   phase?: string;
 }
@@ -35,7 +44,6 @@ export function TaskProgressPanel({
   const [tasks, setTasks] = useState<TaskInfo[]>([]);
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [isLoading, setIsLoading] = useState(true);
-  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
 
   // Load initial tasks from feature's planSpec
   const loadInitialTasks = useCallback(async () => {
@@ -56,25 +64,34 @@ export function TaskProgressPanel({
       if (result.success && feature?.planSpec?.tasks) {
         const planSpec = feature.planSpec as any;
         const planTasks = planSpec.tasks;
-        const currentId = planSpec.currentTaskId;
+        const currentIds = (planSpec.currentTaskIds || []) as string[];
+        const currentId = planSpec.currentTaskId as string | undefined;
         const completedCount = planSpec.tasksCompleted || 0;
 
         // Convert planSpec tasks to TaskInfo with proper status
-        const initialTasks: TaskInfo[] = planTasks.map((t: any, index: number) => ({
-          id: t.id,
-          description: t.description,
-          filePath: t.filePath,
-          phase: t.phase,
-          status:
-            index < completedCount
-              ? ('completed' as const)
-              : t.id === currentId
-                ? ('in_progress' as const)
-                : ('pending' as const),
-        }));
+        const normalizedCurrentIds =
+          currentIds.length > 0 ? currentIds : currentId ? [currentId] : [];
+
+        const initialTasks: TaskInfo[] = planTasks.map((t: any, index: number) => {
+          const statusFromPlan = t.status as TaskInfo['status'] | undefined;
+          const status =
+            statusFromPlan ||
+            (normalizedCurrentIds.includes(t.id)
+              ? ('in_progress' as const)
+              : index < completedCount
+                ? ('completed' as const)
+                : ('pending' as const));
+
+          return {
+            id: t.id,
+            description: t.description,
+            filePath: t.filePath,
+            phase: t.phase,
+            status,
+          };
+        });
 
         setTasks(initialTasks);
-        setCurrentTaskId(currentId || null);
       }
     } catch (error) {
       logger.error('Failed to load initial tasks:', error);
@@ -101,22 +118,15 @@ export function TaskProgressPanel({
         case 'auto_mode_task_started':
           if ('taskId' in event && 'taskDescription' in event) {
             const taskEvent = event as Extract<AutoModeEvent, { type: 'auto_mode_task_started' }>;
-            setCurrentTaskId(taskEvent.taskId);
-
             setTasks((prev) => {
               // Check if task already exists
               const existingIndex = prev.findIndex((t) => t.id === taskEvent.taskId);
 
               if (existingIndex !== -1) {
-                // Update status to in_progress and mark previous as completed
-                return prev.map((t, idx) => {
+                // Update status to in_progress without assuming sequential execution
+                return prev.map((t) => {
                   if (t.id === taskEvent.taskId) {
                     return { ...t, status: 'in_progress' as const };
-                  }
-                  // If we are moving to a task that is further down the list, assume previous ones are completed
-                  // This is a heuristic, but usually correct for sequential execution
-                  if (idx < existingIndex && t.status !== 'completed') {
-                    return { ...t, status: 'completed' as const };
                   }
                   return t;
                 });
@@ -143,7 +153,6 @@ export function TaskProgressPanel({
                 t.id === taskEvent.taskId ? { ...t, status: 'completed' as const } : t
               )
             );
-            setCurrentTaskId(null);
           }
           break;
       }
@@ -239,6 +248,8 @@ export function TaskProgressPanel({
                 const isActive = task.status === 'in_progress';
                 const isCompleted = task.status === 'completed';
                 const isPending = task.status === 'pending';
+                const isBlocked = task.status === 'blocked';
+                const isFailed = task.status === 'failed';
 
                 return (
                   <div
@@ -256,11 +267,17 @@ export function TaskProgressPanel({
                           'bg-green-500/10 border-green-500/20 text-green-600 dark:text-green-400',
                         isActive &&
                           'bg-primary border-primary text-primary-foreground ring-4 ring-primary/10 scale-110',
+                        isFailed &&
+                          'bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400',
+                        isBlocked &&
+                          'bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400',
                         isPending && 'bg-muted border-border text-muted-foreground'
                       )}
                     >
                       {isCompleted && <Check className="h-3.5 w-3.5" />}
                       {isActive && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      {isFailed && <XCircle className="h-3.5 w-3.5" />}
+                      {isBlocked && <AlertTriangle className="h-3.5 w-3.5" />}
                       {isPending && <Circle className="h-2 w-2 fill-current opacity-50" />}
                     </div>
 

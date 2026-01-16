@@ -307,6 +307,53 @@ export function PromptCustomizationSection({
                 critical={true}
               />
             </div>
+
+            <div className="pt-2 border-t border-border/50">
+              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Role System Prompts
+              </h4>
+              <div className="mt-3 space-y-4">
+                <PromptField
+                  label="Planner Role"
+                  description="System prompt for planning, task decomposition, and dependencies"
+                  defaultValue={DEFAULT_AUTO_MODE_PROMPTS.plannerSystemPrompt}
+                  customValue={promptCustomization?.autoMode?.plannerSystemPrompt}
+                  onCustomValueChange={(value) =>
+                    updatePrompt('autoMode', 'plannerSystemPrompt', value)
+                  }
+                />
+
+                <PromptField
+                  label="Worker Role"
+                  description="System prompt for implementation and tests"
+                  defaultValue={DEFAULT_AUTO_MODE_PROMPTS.workerSystemPrompt}
+                  customValue={promptCustomization?.autoMode?.workerSystemPrompt}
+                  onCustomValueChange={(value) =>
+                    updatePrompt('autoMode', 'workerSystemPrompt', value)
+                  }
+                />
+
+                <PromptField
+                  label="Judge Role"
+                  description="System prompt for evaluation and completion checks"
+                  defaultValue={DEFAULT_AUTO_MODE_PROMPTS.judgeSystemPrompt}
+                  customValue={promptCustomization?.autoMode?.judgeSystemPrompt}
+                  onCustomValueChange={(value) =>
+                    updatePrompt('autoMode', 'judgeSystemPrompt', value)
+                  }
+                />
+
+                <PromptField
+                  label="Refactor Role"
+                  description="System prompt for complex refactors and architectural changes"
+                  defaultValue={DEFAULT_AUTO_MODE_PROMPTS.refactorSystemPrompt}
+                  customValue={promptCustomization?.autoMode?.refactorSystemPrompt}
+                  onCustomValueChange={(value) =>
+                    updatePrompt('autoMode', 'refactorSystemPrompt', value)
+                  }
+                />
+              </div>
+            </div>
           </TabsContent>
 
           {/* Agent Tab */}

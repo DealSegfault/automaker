@@ -255,6 +255,29 @@ export function useAutoMode() {
           }
           break;
 
+        case 'plan_quality_gate_failed': {
+          if (event.featureId) {
+            const issues = event.issues || [];
+            const maxIssues = 3;
+            const issueSummary = issues.slice(0, maxIssues).join('; ');
+            const extraCount = issues.length - maxIssues;
+            const messageBase = `Plan quality gate failed (attempt ${event.attempt})`;
+            const message =
+              issueSummary.length > 0
+                ? `${messageBase}: ${issueSummary}${extraCount > 0 ? ` (+${extraCount} more)` : ''}`
+                : messageBase;
+
+            logger.debug(`[AutoMode] ${message}`);
+            addAutoModeActivity({
+              featureId: event.featureId,
+              type: 'planning',
+              message,
+              phase: 'planning',
+            });
+          }
+          break;
+        }
+
         case 'planning_started':
           // Log when planning phase begins
           if (event.featureId && event.mode && event.message) {

@@ -191,7 +191,7 @@ export function getModelForUseCase(
     features: CLAUDE_MODEL_MAP['haiku'], // used to generate features from app specs
     suggestions: CLAUDE_MODEL_MAP['haiku'], // used for suggestions
     chat: CLAUDE_MODEL_MAP['haiku'], // used for chat
-    auto: CLAUDE_MODEL_MAP['opus'], // used to implement kanban cards
+    auto: DEFAULT_MODELS.cursor, // use Cursor auto mode to implement kanban cards by default
     default: CLAUDE_MODEL_MAP['opus'],
   };
 

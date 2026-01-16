@@ -131,6 +131,8 @@ export interface ResolvedPhaseModel {
   model: string;
   /** Optional thinking level for extended thinking */
   thinkingLevel?: ThinkingLevel;
+  /** Optional reasoning effort for Codex/OpenAI models */
+  reasoningEffort?: PhaseModelEntry['reasoningEffort'];
 }
 
 /**
@@ -179,6 +181,7 @@ export function resolvePhaseModel(
     return {
       model: resolveModelString(phaseModel, defaultModel),
       thinkingLevel: undefined,
+      reasoningEffort: undefined,
     };
   }
 
@@ -189,5 +192,6 @@ export function resolvePhaseModel(
   return {
     model: resolveModelString(phaseModel.model, defaultModel),
     thinkingLevel: phaseModel.thinkingLevel,
+    reasoningEffort: phaseModel.reasoningEffort,
   };
 }

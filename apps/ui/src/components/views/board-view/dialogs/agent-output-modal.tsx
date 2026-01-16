@@ -198,6 +198,15 @@ export function AgentOutputModal({
             newContent = `\n⏸️ Plan generated - waiting for your approval...\n`;
           }
           break;
+        case 'plan_quality_gate_failed': {
+          // Show when a plan fails quality gates
+          if ('issues' in event && 'attempt' in event) {
+            const issues = event.issues || [];
+            const issueSummary = issues.length > 0 ? `\n- ${issues.join('\n- ')}` : '';
+            newContent = `\n⚠️ Plan quality gate failed (attempt ${event.attempt}).${issueSummary}\n`;
+          }
+          break;
+        }
         case 'plan_approved':
           // Show when plan is manually approved
           if ('hasEdits' in event) {

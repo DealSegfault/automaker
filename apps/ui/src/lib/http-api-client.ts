@@ -1533,6 +1533,7 @@ export class HttpApiClient implements ElectronAPI {
         editedPlan,
         feedback,
       }),
+    metrics: (projectPath: string) => this.post('/api/auto-mode/metrics', { projectPath }),
     onEvent: (callback: (event: AutoModeEvent) => void) => {
       return this.subscribeToEvent('auto-mode:event', callback as EventCallback);
     },

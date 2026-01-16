@@ -15,6 +15,7 @@
 
 import path from 'path';
 import { secureFs } from '@automaker/platform';
+import type { ArchitecturalMemory } from '@automaker/types';
 import {
   getMemoryDir,
   parseFrontmatter,
@@ -26,6 +27,7 @@ import {
   type MemoryFsModule,
   type MemoryMetadata,
 } from './memory-loader.js';
+import { loadArchitecturalMemory, formatArchitecturalMemory } from './architectural-memory.js';
 
 /**
  * Metadata structure for context files
@@ -61,7 +63,11 @@ export interface MemoryFileInfo {
 export interface ContextFilesResult {
   files: ContextFileInfo[];
   memoryFiles: MemoryFileInfo[];
+  architecturalMemory?: ArchitecturalMemory;
   formattedPrompt: string;
+  contextPrompt?: string;
+  memoryPrompt?: string;
+  architecturalMemoryPrompt?: string;
 }
 
 /**
@@ -219,6 +225,8 @@ export async function loadContextFiles(
 
   const files: ContextFileInfo[] = [];
   const memoryFiles: MemoryFileInfo[] = [];
+  let architecturalMemory: ArchitecturalMemory | undefined;
+  let architecturalMemoryPrompt = '';
 
   // Load context files
   try {
@@ -405,7 +413,17 @@ export async function loadContextFiles(
   // Build combined prompt
   const contextPrompt = buildContextPrompt(files);
   const memoryPrompt = buildMemoryPrompt(memoryFiles);
-  const formattedPrompt = [contextPrompt, memoryPrompt].filter(Boolean).join('\n\n');
+  if (includeMemory) {
+    try {
+      architecturalMemory = await loadArchitecturalMemory(projectPath, fsModule as MemoryFsModule);
+      architecturalMemoryPrompt = formatArchitecturalMemory(architecturalMemory);
+    } catch (error) {
+      console.warn('[ContextLoader] Failed to load architectural memory:', error);
+    }
+  }
+  const formattedPrompt = [contextPrompt, memoryPrompt, architecturalMemoryPrompt]
+    .filter(Boolean)
+    .join('\n\n');
 
   const loadedItems = [];
   if (files.length > 0) {
@@ -414,11 +432,22 @@ export async function loadContextFiles(
   if (memoryFiles.length > 0) {
     loadedItems.push(`${memoryFiles.length} memory file(s)`);
   }
+  if (architecturalMemoryPrompt) {
+    loadedItems.push('architectural memory');
+  }
   if (loadedItems.length > 0) {
     console.log(`[ContextLoader] Loaded ${loadedItems.join(' and ')}`);
   }
 
-  return { files, memoryFiles, formattedPrompt };
+  return {
+    files,
+    memoryFiles,
+    architecturalMemory,
+    formattedPrompt,
+    contextPrompt,
+    memoryPrompt,
+    architecturalMemoryPrompt,
+  };
 }
 
 /**

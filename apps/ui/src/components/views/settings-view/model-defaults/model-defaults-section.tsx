@@ -66,6 +66,29 @@ const GENERATION_TASKS: PhaseConfig[] = [
   },
 ];
 
+const AGENT_ROLE_TASKS: PhaseConfig[] = [
+  {
+    key: 'plannerModel',
+    label: 'Planner',
+    description: 'Decomposes features into tasks and dependencies',
+  },
+  {
+    key: 'workerModel',
+    label: 'Worker',
+    description: 'Implements tasks and writes tests',
+  },
+  {
+    key: 'judgeModel',
+    label: 'Judge',
+    description: 'Evaluates quality and completion',
+  },
+  {
+    key: 'refactorModel',
+    label: 'Refactor',
+    description: 'Handles complex architectural refactors',
+  },
+];
+
 const MEMORY_TASKS: PhaseConfig[] = [
   {
     key: 'memoryExtractionModel',
@@ -162,6 +185,13 @@ export function ModelDefaultsSection() {
           title="Generation Tasks"
           subtitle="Powerful models recommended for quality output"
           phases={GENERATION_TASKS}
+        />
+
+        {/* Agent Roles */}
+        <PhaseGroup
+          title="Agent Roles"
+          subtitle="Role-specific models for planning, execution, and evaluation"
+          phases={AGENT_ROLE_TASKS}
         />
 
         {/* Memory Tasks */}

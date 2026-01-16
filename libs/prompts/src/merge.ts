@@ -48,6 +48,22 @@ export function mergeAutoModePrompts(custom?: AutoModePrompts): ResolvedAutoMode
     ),
     planningSpec: resolvePrompt(custom?.planningSpec, DEFAULT_AUTO_MODE_PROMPTS.planningSpec),
     planningFull: resolvePrompt(custom?.planningFull, DEFAULT_AUTO_MODE_PROMPTS.planningFull),
+    plannerSystemPrompt: resolvePrompt(
+      custom?.plannerSystemPrompt,
+      DEFAULT_AUTO_MODE_PROMPTS.plannerSystemPrompt
+    ),
+    workerSystemPrompt: resolvePrompt(
+      custom?.workerSystemPrompt,
+      DEFAULT_AUTO_MODE_PROMPTS.workerSystemPrompt
+    ),
+    judgeSystemPrompt: resolvePrompt(
+      custom?.judgeSystemPrompt,
+      DEFAULT_AUTO_MODE_PROMPTS.judgeSystemPrompt
+    ),
+    refactorSystemPrompt: resolvePrompt(
+      custom?.refactorSystemPrompt,
+      DEFAULT_AUTO_MODE_PROMPTS.refactorSystemPrompt
+    ),
     featurePromptTemplate: resolvePrompt(
       custom?.featurePromptTemplate,
       DEFAULT_AUTO_MODE_PROMPTS.featurePromptTemplate

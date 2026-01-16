@@ -4,7 +4,7 @@
 
 import type { SettingsService } from '../services/settings-service.js';
 import type { ContextFilesResult, ContextFileInfo } from '@automaker/utils';
-import { createLogger } from '@automaker/utils';
+import { createLogger, formatArchitecturalMemory } from '@automaker/utils';
 import type { MCPServerConfig, McpServerConfig, PromptCustomization } from '@automaker/types';
 import {
   mergeAutoModePrompts,
@@ -79,15 +79,12 @@ export function filterClaudeMdFromContext(
   // Filter out CLAUDE.md (case-insensitive)
   const nonClaudeFiles = contextResult.files.filter((f) => f.name.toLowerCase() !== 'claude.md');
 
-  // If all files were CLAUDE.md, return empty string
-  if (nonClaudeFiles.length === 0) {
-    return '';
-  }
-
   // Rebuild prompt without CLAUDE.md using the same format as loadContextFiles
   const formattedFiles = nonClaudeFiles.map((file) => formatContextFileEntry(file));
-
-  return `# Project Context Files
+  const contextPrompt =
+    formattedFiles.length === 0
+      ? ''
+      : `# Project Context Files
 
 The following context files provide project-specific rules, conventions, and guidelines.
 Each file serves a specific purpose - use the description to understand when to reference it.
@@ -106,6 +103,16 @@ ${formattedFiles.join('\n\n---\n\n')}
 
 **REMINDER**: Before taking any action, verify you are following the conventions specified above.
 `;
+
+  const memoryPrompt =
+    contextResult.memoryPrompt ?? buildMemoryPromptFromFiles(contextResult.memoryFiles);
+  const architecturalMemoryPrompt =
+    contextResult.architecturalMemoryPrompt ??
+    (contextResult.architecturalMemory
+      ? formatArchitecturalMemory(contextResult.architecturalMemory)
+      : '');
+
+  return [contextPrompt, memoryPrompt, architecturalMemoryPrompt].filter(Boolean).join('\n\n');
 }
 
 /**
@@ -117,6 +124,30 @@ function formatContextFileEntry(file: ContextFileInfo): string {
   const pathInfo = `**Path:** \`${file.path}\``;
   const descriptionInfo = file.description ? `\n**Purpose:** ${file.description}` : '';
   return `${header}\n${pathInfo}${descriptionInfo}\n\n${file.content}`;
+}
+
+function buildMemoryPromptFromFiles(memoryFiles: ContextFilesResult['memoryFiles']): string {
+  if (memoryFiles.length === 0) {
+    return '';
+  }
+
+  const sections = memoryFiles.map((file) => {
+    return `## ${file.category.toUpperCase()}
+
+${file.content}`;
+  });
+
+  return `# Project Memory
+
+The following learnings and decisions from previous work are available.
+**IMPORTANT**: Review these carefully before making changes that could conflict with past decisions.
+
+---
+
+${sections.join('\n\n---\n\n')}
+
+---
+`;
 }
 
 /**

@@ -157,6 +157,16 @@ export interface PhaseModelConfig {
   /** Model for AI suggestions (feature, refactoring, security, performance) */
   suggestionsModel: PhaseModelEntry;
 
+  // Agent role models - used by Auto Mode pipeline
+  /** Model for planner role (decomposition, dependencies) */
+  plannerModel: PhaseModelEntry;
+  /** Model for worker role (implementation) */
+  workerModel: PhaseModelEntry;
+  /** Model for judge role (quality evaluation) */
+  judgeModel: PhaseModelEntry;
+  /** Model for refactor role (complex changes) */
+  refactorModel: PhaseModelEntry;
+
   // Memory tasks - for learning extraction and memory operations
   /** Model for extracting learnings from completed agent sessions */
   memoryExtractionModel: PhaseModelEntry;
@@ -736,12 +746,18 @@ export const DEFAULT_PHASE_MODELS: PhaseModelConfig = {
   projectAnalysisModel: { model: 'sonnet' },
   suggestionsModel: { model: 'sonnet' },
 
+  // Agent roles - default to strong planning + fast implementation
+  plannerModel: { model: 'opus' },
+  workerModel: { model: 'codex-gpt-5.1-codex-max' },
+  judgeModel: { model: 'sonnet' },
+  refactorModel: { model: 'opus' },
+
   // Memory - use fast model for learning extraction (cost-effective)
   memoryExtractionModel: { model: 'haiku' },
 };
 
 /** Current version of the global settings schema */
-export const SETTINGS_VERSION = 4;
+export const SETTINGS_VERSION = 5;
 /** Current version of the credentials schema */
 export const CREDENTIALS_VERSION = 1;
 /** Current version of the project settings schema */

@@ -17,6 +17,7 @@ import { createAnalyzeProjectHandler } from './routes/analyze-project.js';
 import { createFollowUpFeatureHandler } from './routes/follow-up-feature.js';
 import { createCommitFeatureHandler } from './routes/commit-feature.js';
 import { createApprovePlanHandler } from './routes/approve-plan.js';
+import { createMetricsHandler } from './routes/metrics.js';
 
 export function createAutoModeRoutes(autoModeService: AutoModeService): Router {
   const router = Router();
@@ -63,6 +64,7 @@ export function createAutoModeRoutes(autoModeService: AutoModeService): Router {
     validatePathParams('projectPath'),
     createApprovePlanHandler(autoModeService)
   );
+  router.post('/metrics', validatePathParams('projectPath'), createMetricsHandler(autoModeService));
 
   return router;
 }

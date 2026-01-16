@@ -91,3 +91,13 @@ export {
   type LearningEntry,
   type SimpleMemoryFile,
 } from './memory-loader.js';
+
+// Architectural memory
+export {
+  getArchitecturalMemoryPath,
+  createEmptyArchitecturalMemory,
+  loadArchitecturalMemory,
+  writeArchitecturalMemory,
+  updateArchitecturalMemory,
+  formatArchitecturalMemory,
+} from './architectural-memory.js';

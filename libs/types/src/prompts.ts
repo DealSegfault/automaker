@@ -36,6 +36,18 @@ export interface AutoModePrompts {
   /** Planning mode: Comprehensive Software Design Document (full SDD mode) */
   planningFull?: CustomPrompt;
 
+  /** System prompt for planner role (task decomposition, dependencies, scope) */
+  plannerSystemPrompt?: CustomPrompt;
+
+  /** System prompt for worker role (implementation and tests) */
+  workerSystemPrompt?: CustomPrompt;
+
+  /** System prompt for judge role (quality evaluation and completion) */
+  judgeSystemPrompt?: CustomPrompt;
+
+  /** System prompt for refactor role (complex architectural changes) */
+  refactorSystemPrompt?: CustomPrompt;
+
   /** Template for building feature implementation prompts */
   featurePromptTemplate?: CustomPrompt;
 
@@ -130,6 +142,10 @@ export interface ResolvedAutoModePrompts {
   planningLiteWithApproval: string;
   planningSpec: string;
   planningFull: string;
+  plannerSystemPrompt: string;
+  workerSystemPrompt: string;
+  judgeSystemPrompt: string;
+  refactorSystemPrompt: string;
   featurePromptTemplate: string;
   followUpPromptTemplate: string;
   continuationPromptTemplate: string;

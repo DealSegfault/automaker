@@ -16,6 +16,15 @@ Context files are user-defined documents stored in `.automaker/context/` that pr
 └── ... (any .md or .txt files)
 ```
 
+Memory files are stored separately:
+
+```
+{projectPath}/.automaker/memory/
+├── gotchas.md                   # High-priority pitfalls
+├── ... (other .md memory files)
+└── architectural-memory.json    # Structured decisions & patterns
+```
+
 ## Metadata
 
 File descriptions are stored in `context-metadata.json`:
@@ -56,6 +65,8 @@ const { formattedPrompt, files } = await loadContextFiles({
 ```typescript
 interface ContextFilesResult {
   files: ContextFileInfo[]; // Individual file info
+  memoryFiles: MemoryFileInfo[]; // Selected memory file info
+  architecturalMemory?: ArchitecturalMemory; // Structured architectural memory
   formattedPrompt: string; // Formatted prompt ready to use
 }
 
@@ -64,6 +75,22 @@ interface ContextFileInfo {
   path: string; // Full path to file
   content: string; // File contents
   description?: string; // From metadata (explains when/why to use)
+}
+
+interface MemoryFileInfo {
+  name: string; // File name (e.g., "gotchas.md")
+  path: string; // Full path to file
+  content: string; // File contents
+  category: string; // Category derived from file name
+}
+
+interface ArchitecturalMemory {
+  version: number;
+  decisions: Record<string, ArchitecturalDecision>;
+  rejectedApproaches: Record<string, RejectedApproach>;
+  patterns: CodePattern[];
+  testStrategy?: TestingStrategy;
+  updatedAt: string;
 }
 ```
 
@@ -116,7 +143,9 @@ The formatted prompt includes:
    - Full path (for agents to read more if needed)
    - Purpose/description (from metadata)
    - Full file content
-3. **Reminder** - Reinforces that agents must follow the conventions
+3. **Memory** - Selected learnings and decisions from `.automaker/memory/`
+4. **Architectural Memory** - Structured decisions/patterns from `architectural-memory.json`
+5. **Reminder** - Reinforces that agents must follow the conventions
 
 Example output:
 

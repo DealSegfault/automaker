@@ -32,6 +32,19 @@ export interface FeatureTextFilePath {
   [key: string]: unknown;
 }
 
+export type PlanTaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'blocked';
+export type PlanTaskComplexity = 'low' | 'medium' | 'high';
+
+export interface PlanTask {
+  id: string; // e.g., "T001"
+  description: string;
+  filePath?: string;
+  phase?: string;
+  dependsOn?: string[];
+  complexity?: PlanTaskComplexity;
+  status?: PlanTaskStatus;
+}
+
 export interface Feature {
   id: string;
   title?: string;
@@ -62,6 +75,11 @@ export interface Feature {
     reviewedByUser: boolean;
     tasksCompleted?: number;
     tasksTotal?: number;
+    tasks?: PlanTask[];
+    currentTaskId?: string;
+    currentTaskIds?: string[];
+    taskStateVersion?: number;
+    qualityIssues?: string[];
   };
   error?: string;
   summary?: string;

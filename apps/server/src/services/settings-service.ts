@@ -172,6 +172,11 @@ export class SettingsService {
       needsSave = true;
     }
 
+    // Migration v4 -> v5: Add agent role model defaults (planner/worker/judge/refactor)
+    if (storedVersion < 5) {
+      needsSave = true;
+    }
+
     // Update version if any migration occurred
     if (needsSave) {
       result.version = SETTINGS_VERSION;

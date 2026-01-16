@@ -37,7 +37,32 @@ export type {
   FeatureTextFilePath,
   FeatureStatus,
   DescriptionHistoryEntry,
+  PlanTask,
+  PlanTaskStatus,
+  PlanTaskComplexity,
 } from './feature.js';
+
+// Auto-mode metrics types
+export type {
+  QualityGateStatus,
+  QualityGateResult,
+  FeatureQualityMetrics,
+  AutoModeStageDurations,
+  AutoModeFeatureRunStatus,
+  AutoModeFeatureRunMetrics,
+  AutoModeMetricsStore,
+  AutoModeMetricsSummary,
+  AutoModeMetricsSnapshot,
+} from './auto-mode-metrics.js';
+
+// Architectural memory types
+export type {
+  ArchitecturalMemory,
+  ArchitecturalDecision,
+  RejectedApproach,
+  CodePattern,
+  TestingStrategy,
+} from './architectural-memory.js';
 
 // Session types
 export type {

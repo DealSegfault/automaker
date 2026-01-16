@@ -10,13 +10,29 @@
  */
 
 import { ProviderFactory } from '../providers/provider-factory.js';
+import type { BaseProvider } from '../providers/base-provider.js';
 import type {
   ExecuteOptions,
   Feature,
   ModelProvider,
   PipelineStep,
+  PlanTask,
+  PlanTaskComplexity,
+  PlanTaskStatus,
+  ArchitecturalDecision,
+  RejectedApproach,
+  CodePattern,
+  TestingStrategy,
+  AutoModeMetricsStore,
+  AutoModeMetricsSnapshot,
+  AutoModeMetricsSummary,
+  AutoModeFeatureRunMetrics,
+  FeatureQualityMetrics,
+  QualityGateResult,
+  AutoModeStageDurations,
   ThinkingLevel,
   PlanningMode,
+  ReasoningEffort,
 } from '@automaker/types';
 import { DEFAULT_PHASE_MODELS, stripProviderPrefix } from '@automaker/types';
 import {
@@ -24,6 +40,7 @@ import {
   classifyError,
   loadContextFiles,
   appendLearning,
+  updateArchitecturalMemory,
   recordMemoryUsage,
   createLogger,
 } from '@automaker/utils';
@@ -56,12 +73,21 @@ const execAsync = promisify(exec);
 
 // PlanningMode type is imported from @automaker/types
 
-interface ParsedTask {
-  id: string; // e.g., "T001"
-  description: string; // e.g., "Create user model"
-  filePath?: string; // e.g., "src/models/user.ts"
-  phase?: string; // e.g., "Phase 1: Foundation" (for full mode)
-  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+interface ParsedTask extends PlanTask {
+  status: PlanTaskStatus;
+}
+
+interface RoleModelConfig {
+  model: string;
+  thinkingLevel?: ThinkingLevel;
+  reasoningEffort?: ReasoningEffort;
+}
+
+interface RolePromptConfig {
+  planner?: string;
+  worker?: string;
+  judge?: string;
+  refactor?: string;
 }
 
 interface PlanSpec {
@@ -74,7 +100,23 @@ interface PlanSpec {
   tasksCompleted?: number;
   tasksTotal?: number;
   currentTaskId?: string;
+  currentTaskIds?: string[];
   tasks?: ParsedTask[];
+  taskStateVersion?: number;
+  qualityIssues?: string[];
+}
+
+interface QualityCheckOutcome {
+  passed: boolean;
+  results: QualityGateResult[];
+  metrics: FeatureQualityMetrics;
+}
+
+interface JudgeResult {
+  verdict: 'pass' | 'revise' | 'fail';
+  issues: string[];
+  recommendations: string[];
+  confidence?: number;
 }
 
 /**
@@ -133,30 +175,67 @@ function parseTasksFromSpec(specContent: string): ParsedTask[] {
 
 /**
  * Parse a single task line
- * Format: - [ ] T###: Description | File: path/to/file
+ * Format: - [ ] T###: Description | File: path/to/file | DependsOn: T000, T001 | Complexity: low
  */
 function parseTaskLine(line: string, currentPhase?: string): ParsedTask | null {
-  // Match pattern: - [ ] T###: Description | File: path
-  const taskMatch = line.match(/- \[ \] (T\d{3}):\s*([^|]+)(?:\|\s*File:\s*(.+))?$/);
+  const taskMatch = line.match(/- \[ \] (T\d{3}):\s*(.+)$/);
   if (!taskMatch) {
-    // Try simpler pattern without file
-    const simpleMatch = line.match(/- \[ \] (T\d{3}):\s*(.+)$/);
-    if (simpleMatch) {
-      return {
-        id: simpleMatch[1],
-        description: simpleMatch[2].trim(),
-        phase: currentPhase,
-        status: 'pending',
-      };
-    }
     return null;
   }
 
+  const [, id, remainder] = taskMatch;
+  const parts = remainder
+    .split('|')
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length === 0) {
+    return null;
+  }
+
+  const description = parts.shift()!.trim();
+  let filePath: string | undefined;
+  let dependsOn: string[] | undefined;
+  let complexity: PlanTaskComplexity | undefined;
+
+  for (const part of parts) {
+    const fileMatch = part.match(/^File:\s*(.+)$/i);
+    if (fileMatch) {
+      filePath = fileMatch[1].trim();
+      continue;
+    }
+
+    const depsMatch = part.match(/^DependsOn:\s*(.+)$/i);
+    if (depsMatch) {
+      const raw = depsMatch[1].trim().replace(/[\[\]]/g, '');
+      const deps = raw
+        .split(/[,\s]+/)
+        .map((dep) => dep.trim())
+        .filter(Boolean);
+      dependsOn = deps.length > 0 ? deps : undefined;
+      continue;
+    }
+
+    const complexityMatch = part.match(/^Complexity:\s*(.+)$/i);
+    if (complexityMatch) {
+      const normalized = complexityMatch[1].trim().toLowerCase();
+      if (normalized.startsWith('l')) {
+        complexity = 'low';
+      } else if (normalized.startsWith('m')) {
+        complexity = 'medium';
+      } else if (normalized.startsWith('h')) {
+        complexity = 'high';
+      }
+    }
+  }
+
   return {
-    id: taskMatch[1],
-    description: taskMatch[2].trim(),
-    filePath: taskMatch[3]?.trim(),
+    id,
+    description,
+    filePath,
     phase: currentPhase,
+    dependsOn,
+    complexity,
     status: 'pending',
   };
 }
@@ -179,6 +258,7 @@ interface RunningFeature {
   startTime: number;
   model?: string;
   provider?: ModelProvider;
+  metricsRunId?: string;
 }
 
 interface AutoLoopState {
@@ -204,6 +284,16 @@ interface AutoModeConfig {
 // Constants for consecutive failure tracking
 const CONSECUTIVE_FAILURE_THRESHOLD = 3; // Pause after 3 consecutive failures
 const FAILURE_WINDOW_MS = 60000; // Failures within 1 minute count as consecutive
+const DEFAULT_MAX_TASK_CONCURRENCY = 3;
+const MAX_TASK_CONCURRENCY_CAP = 8;
+const TASK_REFINEMENT_COUNT_THRESHOLD = 8;
+const TASK_REFINEMENT_SCORE_THRESHOLD = 14;
+const MAX_SUBPLANNING_PASSES = 1;
+const METRICS_STORE_VERSION = 1;
+const MAX_QUALITY_FIX_ATTEMPTS = 2;
+const MAX_JUDGE_REVISIONS = 2;
+const MAX_METRICS_HISTORY = 200;
+const MAX_PLAN_QUALITY_REVISIONS = 2;
 
 export class AutoModeService {
   private events: EventEmitter;
@@ -218,6 +308,7 @@ export class AutoModeService {
   // Track consecutive failures to detect quota/API issues
   private consecutiveFailures: { timestamp: number; error: string }[] = [];
   private pausedDueToFailures = false;
+  private metricsByProject = new Map<string, AutoModeMetricsStore>();
 
   constructor(events: EventEmitter, settingsService?: SettingsService) {
     this.events = events;
@@ -296,6 +387,268 @@ export class AutoModeService {
    */
   private recordSuccess(): void {
     this.consecutiveFailures = [];
+  }
+
+  private getMetricsPath(projectPath: string): string {
+    return path.join(getAutomakerDir(projectPath), 'metrics', 'auto-mode-metrics.json');
+  }
+
+  private createDefaultMetricsStore(): AutoModeMetricsStore {
+    return {
+      version: METRICS_STORE_VERSION,
+      updatedAt: new Date().toISOString(),
+      runs: [],
+    };
+  }
+
+  private async loadMetricsStore(projectPath: string): Promise<AutoModeMetricsStore> {
+    const cached = this.metricsByProject.get(projectPath);
+    if (cached) {
+      return cached;
+    }
+
+    const metricsPath = this.getMetricsPath(projectPath);
+    try {
+      const raw = (await secureFs.readFile(metricsPath, 'utf-8')) as string;
+      const parsed = JSON.parse(raw) as AutoModeMetricsStore;
+      const store = {
+        ...this.createDefaultMetricsStore(),
+        ...parsed,
+        runs: parsed.runs || [],
+      };
+      this.metricsByProject.set(projectPath, store);
+      return store;
+    } catch {
+      const store = this.createDefaultMetricsStore();
+      this.metricsByProject.set(projectPath, store);
+      return store;
+    }
+  }
+
+  private async saveMetricsStore(projectPath: string, store: AutoModeMetricsStore): Promise<void> {
+    store.updatedAt = new Date().toISOString();
+    if (store.runs.length > MAX_METRICS_HISTORY) {
+      store.runs = store.runs.slice(-MAX_METRICS_HISTORY);
+    }
+
+    const metricsPath = this.getMetricsPath(projectPath);
+    await secureFs.mkdir(path.dirname(metricsPath), { recursive: true });
+    await secureFs.writeFile(metricsPath, JSON.stringify(store, null, 2));
+  }
+
+  private calculateMetricsSummary(
+    store: AutoModeMetricsStore,
+    projectPath?: string
+  ): AutoModeMetricsSummary {
+    const completedRuns = store.runs.filter(
+      (run) => run.status !== 'running' && typeof run.durationMs === 'number'
+    );
+    const totalRuns = completedRuns.length;
+    const successCount = completedRuns.filter((run) => run.status === 'success').length;
+    const successRate = totalRuns > 0 ? successCount / totalRuns : 0;
+    const revisionRate =
+      totalRuns > 0
+        ? completedRuns.reduce((sum, run) => sum + (run.revisions || 0), 0) / totalRuns
+        : 0;
+    const averageDurationMs =
+      totalRuns > 0
+        ? Math.round(completedRuns.reduce((sum, run) => sum + (run.durationMs || 0), 0) / totalRuns)
+        : undefined;
+
+    const complexityBuckets: Record<PlanTaskComplexity, number[]> = {
+      low: [],
+      medium: [],
+      high: [],
+    };
+    for (const run of completedRuns) {
+      if (run.complexity && typeof run.durationMs === 'number') {
+        complexityBuckets[run.complexity].push(run.durationMs);
+      }
+    }
+    const averageDurationByComplexity: Partial<Record<PlanTaskComplexity, number>> = {};
+    for (const [complexity, durations] of Object.entries(complexityBuckets)) {
+      if (durations.length > 0) {
+        averageDurationByComplexity[complexity as PlanTaskComplexity] = Math.round(
+          durations.reduce((sum, value) => sum + value, 0) / durations.length
+        );
+      }
+    }
+
+    const tokenValues = completedRuns
+      .map((run) => run.tokenEfficiency)
+      .filter((value): value is number => typeof value === 'number');
+    const tokenEfficiency =
+      tokenValues.length > 0
+        ? tokenValues.reduce((sum, value) => sum + value, 0) / tokenValues.length
+        : undefined;
+
+    let utilization: number | undefined;
+    if (
+      projectPath &&
+      this.config?.projectPath === projectPath &&
+      (this.config?.maxConcurrency || 0) > 0
+    ) {
+      utilization = Math.min(1, this.runningFeatures.size / this.config.maxConcurrency);
+    }
+
+    const stageTotals: Record<keyof AutoModeStageDurations, number> = {
+      planningMs: 0,
+      executionMs: 0,
+      pipelineMs: 0,
+      verificationMs: 0,
+      judgeMs: 0,
+    };
+    const stageCounts: Record<keyof AutoModeStageDurations, number> = {
+      planningMs: 0,
+      executionMs: 0,
+      pipelineMs: 0,
+      verificationMs: 0,
+      judgeMs: 0,
+    };
+
+    for (const run of completedRuns) {
+      const durations = run.stageDurations;
+      if (!durations) continue;
+      for (const key of Object.keys(stageTotals) as Array<keyof AutoModeStageDurations>) {
+        const value = durations[key];
+        if (typeof value === 'number') {
+          stageTotals[key] += value;
+          stageCounts[key] += 1;
+        }
+      }
+    }
+
+    const stageLabels: Record<keyof AutoModeStageDurations, string> = {
+      planningMs: 'planning',
+      executionMs: 'execution',
+      pipelineMs: 'pipeline',
+      verificationMs: 'verification',
+      judgeMs: 'judge',
+    };
+    let bottleneck: string | undefined;
+    let bottleneckValue = 0;
+    for (const key of Object.keys(stageTotals) as Array<keyof AutoModeStageDurations>) {
+      const count = stageCounts[key];
+      if (count === 0) continue;
+      const average = stageTotals[key] / count;
+      if (average > bottleneckValue) {
+        bottleneckValue = average;
+        bottleneck = stageLabels[key];
+      }
+    }
+
+    return {
+      totalRuns,
+      successRate,
+      revisionRate,
+      averageDurationMs,
+      averageDurationByComplexity,
+      tokenEfficiency,
+      utilization,
+      bottleneck,
+    };
+  }
+
+  private emitMetricsUpdate(projectPath: string, store: AutoModeMetricsStore): void {
+    const summary = this.calculateMetricsSummary(store, projectPath);
+    const latestRun = store.runs[store.runs.length - 1];
+    this.emitAutoModeEvent('auto_mode_metrics_updated', {
+      projectPath,
+      summary,
+      latestRun,
+    });
+  }
+
+  private async updateMetricsStore(
+    projectPath: string,
+    updater: (store: AutoModeMetricsStore) => AutoModeMetricsStore
+  ): Promise<AutoModeMetricsStore> {
+    const current = await this.loadMetricsStore(projectPath);
+    const updated = updater({
+      ...current,
+      runs: [...current.runs],
+    });
+    await this.saveMetricsStore(projectPath, updated);
+    this.metricsByProject.set(projectPath, updated);
+    this.emitMetricsUpdate(projectPath, updated);
+    return updated;
+  }
+
+  private async startMetricsRun(
+    projectPath: string,
+    feature: Feature,
+    model?: string,
+    provider?: ModelProvider
+  ): Promise<string> {
+    const runId = `${feature.id}-${Date.now().toString(36)}`;
+    const startedAt = new Date().toISOString();
+    const complexity = this.getFeatureComplexity(feature);
+
+    await this.updateMetricsStore(projectPath, (store) => {
+      const run: AutoModeFeatureRunMetrics = {
+        runId,
+        featureId: feature.id,
+        title: feature.title,
+        startedAt,
+        status: 'running',
+        complexity,
+        attempts: 1,
+        revisions: 0,
+        model,
+        provider,
+        stageDurations: {},
+      };
+      store.runs.push(run);
+      return store;
+    });
+
+    return runId;
+  }
+
+  private async updateMetricsRun(
+    projectPath: string,
+    runId: string,
+    updater: (run: AutoModeFeatureRunMetrics) => void
+  ): Promise<void> {
+    await this.updateMetricsStore(projectPath, (store) => {
+      const run = store.runs.find((entry) => entry.runId === runId);
+      if (run) {
+        updater(run);
+      }
+      return store;
+    });
+  }
+
+  private getFeatureComplexity(feature: Feature): PlanTaskComplexity | undefined {
+    const tasks = feature.planSpec?.tasks;
+    if (!tasks || tasks.length === 0) {
+      return undefined;
+    }
+
+    const weights: Record<PlanTaskComplexity, number> = {
+      low: 1,
+      medium: 2,
+      high: 3,
+    };
+    const total = tasks.reduce((sum, task) => {
+      const complexity = task.complexity || 'medium';
+      return sum + weights[complexity];
+    }, 0);
+    const average = total / tasks.length;
+
+    if (average <= 1.5) {
+      return 'low';
+    }
+    if (average <= 2.3) {
+      return 'medium';
+    }
+    return 'high';
+  }
+
+  async getMetricsSnapshot(projectPath: string): Promise<AutoModeMetricsSnapshot> {
+    const store = await this.loadMetricsStore(projectPath);
+    const summary = this.calculateMetricsSummary(store, projectPath);
+    return { ...store, summary };
   }
 
   /**
@@ -440,6 +793,7 @@ export class AutoModeService {
       startTime: Date.now(),
     };
     this.runningFeatures.set(featureId, tempRunningFeature);
+    let metricsRunId: string | undefined;
 
     try {
       // Validate that project path is allowed using centralized validation
@@ -531,6 +885,15 @@ export class AutoModeService {
       // Note: contextResult.formattedPrompt now includes both context AND memory
       const combinedSystemPrompt = filterClaudeMdFromContext(contextResult, autoLoadClaudeMd);
 
+      const prompts = await getPromptCustomization(this.settingsService, '[AutoMode]');
+      const rolePrompts: RolePromptConfig = {
+        planner: prompts.autoMode.plannerSystemPrompt,
+        worker: prompts.autoMode.workerSystemPrompt,
+        judge: prompts.autoMode.judgeSystemPrompt,
+        refactor: prompts.autoMode.refactorSystemPrompt,
+      };
+      const roleModels = await this.resolveRoleModels(feature);
+
       if (options?.continuationPrompt) {
         // Continuation prompt is used when recovering from a plan approval
         // The plan was already approved, so skip the planning phase
@@ -557,8 +920,8 @@ export class AutoModeService {
         typeof img === 'string' ? img : img.path
       );
 
-      // Get model from feature and determine provider
-      const model = resolveModelString(feature.model, DEFAULT_MODELS.claude);
+      // Get model from worker role and determine provider
+      const model = roleModels.worker.model;
       const provider = ProviderFactory.getProviderNameForModel(model);
       logger.info(
         `Executing feature ${featureId} with model: ${model}, provider: ${provider} in ${workDir}`
@@ -570,6 +933,10 @@ export class AutoModeService {
 
       // Run the agent with the feature's model and images
       // Context files are passed as system prompt for higher priority
+      metricsRunId = await this.startMetricsRun(projectPath, feature, model, provider);
+      tempRunningFeature.metricsRunId = metricsRunId;
+
+      const executionStart = Date.now();
       await this.runAgent(
         workDir,
         featureId,
@@ -584,15 +951,25 @@ export class AutoModeService {
           requirePlanApproval: feature.requirePlanApproval,
           systemPrompt: combinedSystemPrompt || undefined,
           autoLoadClaudeMd,
-          thinkingLevel: feature.thinkingLevel,
+          roleModels,
+          rolePrompts,
         }
       );
+      const executionDuration = Date.now() - executionStart;
+      if (metricsRunId) {
+        await this.updateMetricsRun(projectPath, metricsRunId, (run) => {
+          run.stageDurations = run.stageDurations || {};
+          run.stageDurations.executionMs =
+            (run.stageDurations.executionMs || 0) + executionDuration;
+        });
+      }
 
       // Check for pipeline steps and execute them
       const pipelineConfig = await pipelineService.getPipelineConfig(projectPath);
       const sortedSteps = [...(pipelineConfig?.steps || [])].sort((a, b) => a.order - b.order);
 
       if (sortedSteps.length > 0) {
+        const pipelineStart = Date.now();
         // Execute pipeline steps sequentially
         await this.executePipelineSteps(
           projectPath,
@@ -601,20 +978,238 @@ export class AutoModeService {
           sortedSteps,
           workDir,
           abortController,
-          autoLoadClaudeMd
+          autoLoadClaudeMd,
+          roleModels,
+          rolePrompts
         );
+        const pipelineDuration = Date.now() - pipelineStart;
+        if (metricsRunId) {
+          await this.updateMetricsRun(projectPath, metricsRunId, (run) => {
+            run.stageDurations = run.stageDurations || {};
+            run.stageDurations.pipelineMs = (run.stageDurations.pipelineMs || 0) + pipelineDuration;
+          });
+        }
       }
+
+      const loadAgentContext = async (): Promise<string> => {
+        const featureDir = getFeatureDir(projectPath, featureId);
+        const outputPath = path.join(featureDir, 'agent-output.md');
+        try {
+          const outputContent = await secureFs.readFile(outputPath, 'utf-8');
+          return typeof outputContent === 'string' ? outputContent : outputContent.toString();
+        } catch {
+          return '';
+        }
+      };
+
+      const runRevision = async (revisionPrompt: string): Promise<number> => {
+        const previousContext = await loadAgentContext();
+        const revisionStart = Date.now();
+        await this.runAgent(
+          workDir,
+          featureId,
+          revisionPrompt,
+          abortController,
+          projectPath,
+          imagePaths,
+          model,
+          {
+            projectPath,
+            planningMode: 'skip',
+            requirePlanApproval: false,
+            previousContent: previousContext,
+            systemPrompt: combinedSystemPrompt || undefined,
+            autoLoadClaudeMd,
+            roleModels,
+            rolePrompts,
+          }
+        );
+        const revisionDuration = Date.now() - revisionStart;
+        if (metricsRunId) {
+          await this.updateMetricsRun(projectPath, metricsRunId, (run) => {
+            run.attempts += 1;
+            run.revisions += 1;
+            run.stageDurations = run.stageDurations || {};
+            run.stageDurations.executionMs =
+              (run.stageDurations.executionMs || 0) + revisionDuration;
+          });
+        }
+        return revisionDuration;
+      };
+
+      const refreshedFeature = await this.loadFeature(projectPath, featureId);
+      if (metricsRunId && refreshedFeature) {
+        const complexity = this.getFeatureComplexity(refreshedFeature);
+        await this.updateMetricsRun(projectPath, metricsRunId, (run) => {
+          run.complexity = complexity || run.complexity;
+          run.title = refreshedFeature.title || run.title;
+        });
+      }
+
+      let verificationDuration = 0;
+      let qualityOutcome: QualityCheckOutcome | null = null;
+      let qualityPassed = true;
+
+      if (feature.skipTests) {
+        const skippedChecks: QualityGateResult[] = [
+          { name: 'Lint', status: 'skipped' },
+          { name: 'Type check', status: 'skipped' },
+          { name: 'Tests', status: 'skipped' },
+          { name: 'Build', status: 'skipped' },
+        ];
+        qualityOutcome = {
+          passed: true,
+          results: skippedChecks,
+          metrics: { checks: skippedChecks },
+        };
+        this.emitAutoModeEvent('auto_mode_quality_metrics', {
+          featureId,
+          projectPath,
+          passed: true,
+          attempt: 0,
+          checks: skippedChecks,
+        });
+        if (metricsRunId) {
+          await this.updateMetricsRun(projectPath, metricsRunId, (run) => {
+            run.quality = qualityOutcome?.metrics;
+          });
+        }
+      } else {
+        const verificationStart = Date.now();
+        qualityOutcome = await this.runQualityChecks({
+          workDir,
+          featureId,
+          projectPath,
+          attempt: 0,
+        });
+        verificationDuration += Date.now() - verificationStart;
+        qualityPassed = qualityOutcome.passed;
+        if (metricsRunId) {
+          await this.updateMetricsRun(projectPath, metricsRunId, (run) => {
+            run.quality = qualityOutcome?.metrics;
+            run.stageDurations = run.stageDurations || {};
+            run.stageDurations.verificationMs =
+              (run.stageDurations.verificationMs || 0) + verificationDuration;
+          });
+        }
+
+        let qualityFixes = 0;
+        while (!qualityPassed && qualityFixes < MAX_QUALITY_FIX_ATTEMPTS) {
+          qualityFixes += 1;
+          await runRevision(this.buildQualityFixPrompt(feature, qualityOutcome!.metrics));
+
+          const retryStart = Date.now();
+          qualityOutcome = await this.runQualityChecks({
+            workDir,
+            featureId,
+            projectPath,
+            attempt: qualityFixes,
+          });
+          const retryDuration = Date.now() - retryStart;
+          verificationDuration += retryDuration;
+          qualityPassed = qualityOutcome.passed;
+
+          if (metricsRunId) {
+            await this.updateMetricsRun(projectPath, metricsRunId, (run) => {
+              run.quality = qualityOutcome?.metrics;
+              run.stageDurations = run.stageDurations || {};
+              run.stageDurations.verificationMs =
+                (run.stageDurations.verificationMs || 0) + retryDuration;
+            });
+          }
+        }
+      }
+
+      let judgeDuration = 0;
+      let judgeResult: JudgeResult | null = null;
+      let judgePassed = true;
+
+      if (qualityPassed) {
+        const agentContext = await loadAgentContext();
+        const judgeStart = Date.now();
+        judgeResult = await this.runJudgeEvaluation({
+          workDir,
+          projectPath,
+          feature,
+          agentOutput: agentContext,
+          qualityMetrics: qualityOutcome?.metrics,
+          systemPrompt: combinedSystemPrompt || undefined,
+          roleModels,
+          rolePrompts,
+        });
+        judgeDuration += Date.now() - judgeStart;
+        judgePassed = judgeResult.verdict === 'pass';
+
+        if (metricsRunId) {
+          await this.updateMetricsRun(projectPath, metricsRunId, (run) => {
+            run.stageDurations = run.stageDurations || {};
+            run.stageDurations.judgeMs = (run.stageDurations.judgeMs || 0) + judgeDuration;
+          });
+        }
+
+        let judgeRevisions = 0;
+        while (!judgePassed && judgeRevisions < MAX_JUDGE_REVISIONS) {
+          judgeRevisions += 1;
+          await runRevision(this.buildJudgeFixPrompt(feature, judgeResult!));
+
+          const retryContext = await loadAgentContext();
+          const judgeRetryStart = Date.now();
+          judgeResult = await this.runJudgeEvaluation({
+            workDir,
+            projectPath,
+            feature,
+            agentOutput: retryContext,
+            qualityMetrics: qualityOutcome?.metrics,
+            systemPrompt: combinedSystemPrompt || undefined,
+            roleModels,
+            rolePrompts,
+          });
+          const retryDuration = Date.now() - judgeRetryStart;
+          judgeDuration += retryDuration;
+          judgePassed = judgeResult.verdict === 'pass';
+
+          if (metricsRunId) {
+            await this.updateMetricsRun(projectPath, metricsRunId, (run) => {
+              run.stageDurations = run.stageDurations || {};
+              run.stageDurations.judgeMs = (run.stageDurations.judgeMs || 0) + retryDuration;
+            });
+          }
+        }
+      }
+
+      const passedGates = qualityPassed && judgePassed;
 
       // Determine final status based on testing mode:
       // - skipTests=false (automated testing): go directly to 'verified' (no manual verify needed)
       // - skipTests=true (manual verification): go to 'waiting_approval' for manual review
-      const finalStatus = feature.skipTests ? 'waiting_approval' : 'verified';
+      const finalStatus = passedGates && !feature.skipTests ? 'verified' : 'waiting_approval';
       await this.updateFeatureStatus(projectPath, featureId, finalStatus);
 
-      // Record success to reset consecutive failure tracking
-      this.recordSuccess();
+      if (metricsRunId) {
+        await this.updateMetricsRun(projectPath, metricsRunId, (run) => {
+          run.status = passedGates ? 'success' : 'failed';
+          run.completedAt = new Date().toISOString();
+          run.durationMs = Date.now() - tempRunningFeature.startTime;
+        });
+      }
 
-      // Record learnings and memory usage after successful feature completion
+      if (passedGates) {
+        // Record success to reset consecutive failure tracking
+        this.recordSuccess();
+      } else {
+        const shouldPause = this.trackFailureAndCheckPause({
+          type: 'quality_gate',
+          message: 'Quality gates failed',
+        });
+        if (shouldPause) {
+          this.signalShouldPause({
+            type: 'quality_gate',
+            message: 'Quality gates failed',
+          });
+        }
+      }
+
+      // Record learnings and memory usage after feature completion
       try {
         const featureDir = getFeatureDir(projectPath, featureId);
         const outputPath = path.join(featureDir, 'agent-output.md');
@@ -633,9 +1228,18 @@ export class AutoModeService {
             projectPath,
             contextResult.memoryFiles,
             agentOutput,
-            true, // success
+            passedGates, // success
             secureFs as Parameters<typeof recordMemoryUsage>[4]
           );
+        }
+
+        if (metricsRunId && agentOutput) {
+          const tokenEfficiency = await this.calculateTokenEfficiency(agentOutput, workDir);
+          if (typeof tokenEfficiency === 'number') {
+            await this.updateMetricsRun(projectPath, metricsRunId, (run) => {
+              run.tokenEfficiency = tokenEfficiency;
+            });
+          }
         }
 
         // Extract and record learnings from the agent output
@@ -646,10 +1250,12 @@ export class AutoModeService {
 
       this.emitAutoModeEvent('auto_mode_feature_complete', {
         featureId,
-        passes: true,
+        passes: passedGates,
         message: `Feature completed in ${Math.round(
           (Date.now() - tempRunningFeature.startTime) / 1000
-        )}s${finalStatus === 'verified' ? ' - auto-verified' : ''}`,
+        )}s${finalStatus === 'verified' ? ' - auto-verified' : ''}${
+          passedGates ? '' : ' - review required'
+        }`,
         projectPath,
         model: tempRunningFeature.model,
         provider: tempRunningFeature.provider,
@@ -689,6 +1295,18 @@ export class AutoModeService {
           });
         }
       }
+
+      if (metricsRunId) {
+        try {
+          await this.updateMetricsRun(projectPath, metricsRunId, (run) => {
+            run.status = 'failed';
+            run.completedAt = new Date().toISOString();
+            run.durationMs = Date.now() - tempRunningFeature.startTime;
+          });
+        } catch (metricsError) {
+          logger.warn('Failed to update metrics after error:', metricsError);
+        }
+      }
     } finally {
       logger.info(`Feature ${featureId} execution ended, cleaning up runningFeatures`);
       logger.info(
@@ -708,7 +1326,9 @@ export class AutoModeService {
     steps: PipelineStep[],
     workDir: string,
     abortController: AbortController,
-    autoLoadClaudeMd: boolean
+    autoLoadClaudeMd: boolean,
+    roleModels: Record<string, RoleModelConfig>,
+    rolePrompts: RolePromptConfig
   ): Promise<void> {
     logger.info(`Executing ${steps.length} pipeline step(s) for feature ${featureId}`);
 
@@ -758,8 +1378,8 @@ export class AutoModeService {
       // Build prompt for this pipeline step
       const prompt = this.buildPipelineStepPrompt(step, feature, previousContext);
 
-      // Get model from feature
-      const model = resolveModelString(feature.model, DEFAULT_MODELS.claude);
+      // Use worker role model for pipeline steps
+      const model = roleModels.worker.model;
 
       // Run the agent for this pipeline step
       await this.runAgent(
@@ -777,7 +1397,8 @@ export class AutoModeService {
           previousContent: previousContext,
           systemPrompt: contextFilesPrompt || undefined,
           autoLoadClaudeMd,
-          thinkingLevel: feature.thinkingLevel,
+          roleModels,
+          rolePrompts,
         }
       );
 
@@ -962,6 +1583,22 @@ Complete the pipeline step instructions above. Review the previous work and appl
     // (SDK handles CLAUDE.md via settingSources), but keep other context files like CODE_QUALITY.md
     const contextFilesPrompt = filterClaudeMdFromContext(contextResult, autoLoadClaudeMd);
 
+    const prompts = await getPromptCustomization(this.settingsService, '[AutoMode] Follow-up');
+    const rolePrompts: RolePromptConfig = {
+      planner: prompts.autoMode.plannerSystemPrompt,
+      worker: prompts.autoMode.workerSystemPrompt,
+      judge: prompts.autoMode.judgeSystemPrompt,
+      refactor: prompts.autoMode.refactorSystemPrompt,
+    };
+    const roleModels = await this.resolveRoleModels(
+      feature ??
+        ({
+          id: featureId,
+          category: 'general',
+          description: prompt,
+        } as Feature)
+    );
+
     // Build complete prompt with feature info, previous context, and follow-up instructions
     let fullPrompt = `## Follow-up on Feature Implementation
 
@@ -984,8 +1621,8 @@ ${prompt}
 ## Task
 Address the follow-up instructions above. Review the previous work and make the requested changes or fixes.`;
 
-    // Get model from feature and determine provider early for tracking
-    const model = resolveModelString(feature?.model, DEFAULT_MODELS.claude);
+    // Use worker role model for follow-up execution
+    const model = roleModels.worker.model;
     const provider = ProviderFactory.getProviderNameForModel(model);
     logger.info(`Follow-up for feature ${featureId} using model: ${model}, provider: ${provider}`);
 
@@ -1095,7 +1732,8 @@ Address the follow-up instructions above. Review the previous work and make the 
           previousContent: previousContext || undefined,
           systemPrompt: contextFilesPrompt || undefined,
           autoLoadClaudeMd,
-          thinkingLevel: feature?.thinkingLevel,
+          roleModels,
+          rolePrompts,
         }
       );
 
@@ -1147,6 +1785,74 @@ Address the follow-up instructions above. Review the previous work and make the 
   /**
    * Verify a feature's implementation
    */
+  private async runQualityChecks(options: {
+    workDir: string;
+    featureId: string;
+    projectPath: string;
+    attempt?: number;
+  }): Promise<QualityCheckOutcome> {
+    const verificationChecks = [
+      { cmd: 'npm run lint', name: 'Lint' },
+      { cmd: 'npm run typecheck', name: 'Type check' },
+      { cmd: 'npm test', name: 'Tests' },
+      { cmd: 'npm run build', name: 'Build' },
+    ];
+
+    const results: QualityGateResult[] = [];
+    let allPassed = true;
+
+    const clampOutput = (value: string): string =>
+      value.length > 4000 ? value.slice(-4000) : value;
+
+    for (let index = 0; index < verificationChecks.length; index++) {
+      const check = verificationChecks[index];
+      const start = Date.now();
+      try {
+        const { stdout, stderr } = await execAsync(check.cmd, {
+          cwd: options.workDir,
+          timeout: 120000,
+        });
+        results.push({
+          name: check.name,
+          status: 'pass',
+          durationMs: Date.now() - start,
+          output: stdout || stderr ? clampOutput(String(stdout || stderr)) : undefined,
+        });
+      } catch (error) {
+        const err = error as { stdout?: string; stderr?: string; message?: string };
+        results.push({
+          name: check.name,
+          status: 'fail',
+          durationMs: Date.now() - start,
+          output: clampOutput(String(err.stdout || err.stderr || err.message || 'Unknown error')),
+        });
+        allPassed = false;
+
+        // Mark remaining checks as skipped
+        for (let remaining = index + 1; remaining < verificationChecks.length; remaining++) {
+          const skipped = verificationChecks[remaining];
+          results.push({
+            name: skipped.name,
+            status: 'skipped',
+          });
+        }
+        break;
+      }
+    }
+
+    const metrics: FeatureQualityMetrics = { checks: results };
+
+    this.emitAutoModeEvent('auto_mode_quality_metrics', {
+      featureId: options.featureId,
+      projectPath: options.projectPath,
+      passed: allPassed,
+      attempt: options.attempt ?? 0,
+      checks: results,
+    });
+
+    return { passed: allPassed, results, metrics };
+  }
+
   async verifyFeature(projectPath: string, featureId: string): Promise<boolean> {
     // Worktrees are in project dir
     const worktreePath = path.join(projectPath, '.worktrees', featureId);
@@ -1159,48 +1865,266 @@ Address the follow-up instructions above. Review the previous work and make the 
       // No worktree
     }
 
-    // Run verification - check if tests pass, build works, etc.
-    const verificationChecks = [
-      { cmd: 'npm run lint', name: 'Lint' },
-      { cmd: 'npm run typecheck', name: 'Type check' },
-      { cmd: 'npm test', name: 'Tests' },
-      { cmd: 'npm run build', name: 'Build' },
-    ];
-
-    let allPassed = true;
-    const results: Array<{ check: string; passed: boolean; output?: string }> = [];
-
-    for (const check of verificationChecks) {
-      try {
-        const { stdout, stderr } = await execAsync(check.cmd, {
-          cwd: workDir,
-          timeout: 120000,
-        });
-        results.push({
-          check: check.name,
-          passed: true,
-          output: stdout || stderr,
-        });
-      } catch (error) {
-        allPassed = false;
-        results.push({
-          check: check.name,
-          passed: false,
-          output: (error as Error).message,
-        });
-        break; // Stop on first failure
-      }
-    }
+    const qualityOutcome = await this.runQualityChecks({
+      workDir,
+      featureId,
+      projectPath,
+    });
+    const allPassed = qualityOutcome.passed;
 
     this.emitAutoModeEvent('auto_mode_feature_complete', {
       featureId,
       passes: allPassed,
       message: allPassed
         ? 'All verification checks passed'
-        : `Verification failed: ${results.find((r) => !r.passed)?.check || 'Unknown'}`,
+        : `Verification failed: ${qualityOutcome.results.find((r) => r.status === 'fail')?.name || 'Unknown'}`,
     });
 
     return allPassed;
+  }
+
+  private async runJudgeEvaluation(options: {
+    workDir: string;
+    projectPath: string;
+    feature: Feature;
+    agentOutput: string;
+    qualityMetrics?: FeatureQualityMetrics;
+    systemPrompt?: string;
+    roleModels: Record<string, RoleModelConfig>;
+    rolePrompts: RolePromptConfig;
+  }): Promise<JudgeResult> {
+    try {
+      const judgeModel =
+        options.roleModels.judge?.model ||
+        options.roleModels.worker?.model ||
+        DEFAULT_MODELS.cursor;
+      const judgeThinkingLevel = options.roleModels.judge?.thinkingLevel;
+      const judgeReasoningEffort = options.roleModels.judge?.reasoningEffort;
+      const judgeProvider = ProviderFactory.getProviderForModel(judgeModel);
+      const judgeBareModel = stripProviderPrefix(judgeModel);
+      const judgeSystemPrompt = this.combineSystemPrompts(
+        options.systemPrompt,
+        options.rolePrompts.judge
+      );
+
+      const taskSummary = options.feature.planSpec?.tasks?.length
+        ? options.feature.planSpec.tasks
+            .map((task) => `- ${task.id}: ${task.description}`)
+            .slice(0, 20)
+            .join('\n')
+        : 'No structured task list available.';
+
+      const qualitySummary = options.qualityMetrics?.checks?.length
+        ? options.qualityMetrics.checks
+            .map((check) => `- ${check.name}: ${check.status}`)
+            .join('\n')
+        : 'No quality checks recorded.';
+
+      const outputExcerpt =
+        options.agentOutput.length > 6000 ? options.agentOutput.slice(-6000) : options.agentOutput;
+
+      const judgePrompt = `You are the judge agent. Evaluate whether the feature implementation is complete and aligned with the plan.
+
+Return ONLY JSON (no markdown, no prose):
+{"verdict":"pass|revise|fail","issues":["..."],"recommendations":["..."],"confidence":0.0}
+
+Feature:
+Title: ${options.feature.title || options.feature.id}
+Description: ${options.feature.description}
+
+Plan Tasks:
+${taskSummary}
+
+Quality Checks:
+${qualitySummary}
+
+Implementation Output (excerpt):
+${outputExcerpt}
+
+Guidance:
+- "pass" if the feature is complete and quality checks are acceptable.
+- "revise" if there are fixable gaps or missing tasks.
+- "fail" if the implementation is fundamentally misaligned.
+`;
+
+      const executeOptions: ExecuteOptions = {
+        prompt: judgePrompt,
+        model: judgeBareModel,
+        maxTurns: 1,
+        cwd: options.workDir,
+        allowedTools: [],
+        readOnly: true,
+        systemPrompt: judgeSystemPrompt,
+        thinkingLevel: judgeThinkingLevel,
+        reasoningEffort: judgeReasoningEffort,
+      };
+
+      const stream = judgeProvider.executeQuery(executeOptions);
+      let responseText = '';
+
+      for await (const msg of stream) {
+        if (msg.type === 'assistant' && msg.message?.content) {
+          for (const block of msg.message.content) {
+            if (block.type === 'text' && block.text) {
+              responseText += block.text;
+            }
+          }
+        } else if (msg.type === 'result' && msg.subtype === 'success') {
+          responseText = msg.result || responseText;
+        }
+      }
+
+      const extractJson = (text: string): string | null => {
+        const codeBlockMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+        if (codeBlockMatch) {
+          return codeBlockMatch[1];
+        }
+        const start = text.indexOf('{');
+        if (start === -1) return null;
+        let depth = 0;
+        for (let i = start; i < text.length; i++) {
+          if (text[i] === '{') depth += 1;
+          if (text[i] === '}') depth -= 1;
+          if (depth === 0) {
+            return text.slice(start, i + 1);
+          }
+        }
+        return null;
+      };
+
+      const jsonText = extractJson(responseText);
+      if (!jsonText) {
+        return {
+          verdict: 'revise',
+          issues: ['Judge response could not be parsed.'],
+          recommendations: [],
+        };
+      }
+
+      const parsed = JSON.parse(jsonText) as {
+        verdict?: string;
+        issues?: unknown;
+        recommendations?: unknown;
+        confidence?: number;
+      };
+      const verdictRaw =
+        typeof parsed.verdict === 'string' ? parsed.verdict.toLowerCase() : 'revise';
+      const verdict: JudgeResult['verdict'] =
+        verdictRaw === 'pass' || verdictRaw === 'fail' || verdictRaw === 'revise'
+          ? (verdictRaw as JudgeResult['verdict'])
+          : 'revise';
+      const issues = Array.isArray(parsed.issues)
+        ? parsed.issues.filter((issue): issue is string => typeof issue === 'string')
+        : [];
+      const recommendations = Array.isArray(parsed.recommendations)
+        ? parsed.recommendations.filter((rec): rec is string => typeof rec === 'string')
+        : [];
+      const confidence = typeof parsed.confidence === 'number' ? parsed.confidence : undefined;
+
+      this.emitAutoModeEvent('auto_mode_judge_result', {
+        featureId: options.feature.id,
+        projectPath: options.projectPath,
+        verdict,
+        issueCount: issues.length,
+      });
+
+      return { verdict, issues, recommendations, confidence };
+    } catch (error) {
+      logger.warn('Judge evaluation failed:', error);
+      return {
+        verdict: 'revise',
+        issues: ['Judge evaluation failed.'],
+        recommendations: [],
+      };
+    }
+  }
+
+  private buildQualityFixPrompt(feature: Feature, qualityMetrics: FeatureQualityMetrics): string {
+    const failingChecks = qualityMetrics.checks.filter((check) => check.status === 'fail');
+    const truncate = (value?: string): string =>
+      value && value.length > 2000 ? value.slice(-2000) : value || '';
+
+    const failures = failingChecks.length
+      ? failingChecks
+          .map((check) => {
+            const output = truncate(check.output);
+            return `- ${check.name}\n${output ? `  Output:\n${output}` : ''}`;
+          })
+          .join('\n')
+      : 'No failing checks reported.';
+
+    return `## Quality Gate Fix Required
+
+${this.buildFeaturePrompt(feature)}
+
+### Failing Checks
+${failures}
+
+## Task
+Fix the issues causing the quality checks to fail. Re-run the failing checks if needed and ensure all checks pass.`;
+  }
+
+  private buildJudgeFixPrompt(feature: Feature, judgeResult: JudgeResult): string {
+    const issues =
+      judgeResult.issues.length > 0
+        ? judgeResult.issues.map((issue) => `- ${issue}`).join('\n')
+        : 'No issues provided.';
+    const recommendations =
+      judgeResult.recommendations.length > 0
+        ? judgeResult.recommendations.map((rec) => `- ${rec}`).join('\n')
+        : 'No recommendations provided.';
+
+    return `## Judge Revision Required
+
+${this.buildFeaturePrompt(feature)}
+
+### Issues
+${issues}
+
+### Recommendations
+${recommendations}
+
+## Task
+Address the judge feedback above. Update the implementation so it fully satisfies the feature requirements.`;
+  }
+
+  private async calculateTokenEfficiency(
+    agentOutput: string,
+    workDir: string
+  ): Promise<number | undefined> {
+    if (!agentOutput.trim()) {
+      return undefined;
+    }
+
+    try {
+      const { stdout } = await execAsync('git diff --numstat', { cwd: workDir });
+      const lines = stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      let changedLines = 0;
+      for (const line of lines) {
+        const [added, deleted] = line.split('\t');
+        const addedCount = added === '-' ? 0 : parseInt(added, 10);
+        const deletedCount = deleted === '-' ? 0 : parseInt(deleted, 10);
+        if (!Number.isNaN(addedCount)) {
+          changedLines += addedCount;
+        }
+        if (!Number.isNaN(deletedCount)) {
+          changedLines += deletedCount;
+        }
+      }
+
+      if (changedLines === 0) {
+        return undefined;
+      }
+
+      const estimatedTokens = Math.ceil(agentOutput.length / 4);
+      return Number((estimatedTokens / changedLines).toFixed(2));
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -1776,6 +2700,10 @@ Format your response as a structured markdown document.`;
         };
       }
 
+      if (feature.planSpec.taskStateVersion === undefined) {
+        feature.planSpec.taskStateVersion = 0;
+      }
+
       // Apply updates
       Object.assign(feature.planSpec, updates);
 
@@ -1784,11 +2712,66 @@ Format your response as a structured markdown document.`;
         feature.planSpec.version = (feature.planSpec.version || 0) + 1;
       }
 
+      if (
+        updates.tasks !== undefined ||
+        updates.currentTaskId !== undefined ||
+        updates.currentTaskIds !== undefined ||
+        updates.tasksCompleted !== undefined ||
+        updates.tasksTotal !== undefined
+      ) {
+        feature.planSpec.taskStateVersion = (feature.planSpec.taskStateVersion || 0) + 1;
+      }
+
       feature.updatedAt = new Date().toISOString();
       await secureFs.writeFile(featurePath, JSON.stringify(feature, null, 2));
     } catch (error) {
       logger.error(`Failed to update planSpec for ${featureId}:`, error);
     }
+  }
+
+  private async updatePlanSpecWithRetry(
+    projectPath: string,
+    featureId: string,
+    updater: (planSpec: PlanSpec) => PlanSpec,
+    maxRetries = 5
+  ): Promise<PlanSpec | null> {
+    const featurePath = path.join(projectPath, '.automaker', 'features', featureId, 'feature.json');
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const data = (await secureFs.readFile(featurePath, 'utf-8')) as string;
+        const feature = JSON.parse(data);
+
+        if (!feature.planSpec) {
+          feature.planSpec = {
+            status: 'pending',
+            version: 1,
+            reviewedByUser: false,
+            taskStateVersion: 0,
+          };
+        }
+
+        const currentTaskVersion = feature.planSpec.taskStateVersion || 0;
+        const nextPlanSpec = updater({ ...feature.planSpec });
+        nextPlanSpec.taskStateVersion = currentTaskVersion + 1;
+        feature.planSpec = nextPlanSpec;
+        feature.updatedAt = new Date().toISOString();
+
+        await secureFs.writeFile(featurePath, JSON.stringify(feature, null, 2));
+
+        // Verify we didn't lose the write to a concurrent update
+        const verifyData = (await secureFs.readFile(featurePath, 'utf-8')) as string;
+        const verified = JSON.parse(verifyData);
+        if (verified.planSpec?.taskStateVersion === currentTaskVersion + 1) {
+          return nextPlanSpec;
+        }
+      } catch (error) {
+        logger.error(`Failed to update planSpec for ${featureId} (attempt ${attempt + 1}):`, error);
+      }
+    }
+
+    logger.error(`Failed to update planSpec for ${featureId} after ${maxRetries} attempts`);
+    return null;
   }
 
   private async loadPendingFeatures(projectPath: string): Promise<Feature[]> {
@@ -1892,6 +2875,203 @@ Format your response as a structured markdown document.`;
     }
 
     return planningPrompt + '\n\n---\n\n## Feature Request\n\n';
+  }
+
+  private getPlanQualityIssues(planContent: string, planningMode: PlanningMode): string[] {
+    const issues: string[] = [];
+    const hasSection = (pattern: RegExp) => pattern.test(planContent);
+
+    if (planningMode === 'lite') {
+      if (!hasSection(/\bGoal\b/i)) {
+        issues.push('Missing Goal section.');
+      }
+      if (!hasSection(/\bApproach\b/i)) {
+        issues.push('Missing Approach section.');
+      }
+      if (!hasSection(/Files?\s+to\s+Touch/i)) {
+        issues.push('Missing Files to Touch section.');
+      }
+      if (!hasSection(/\bTasks?\b/i)) {
+        issues.push('Missing Tasks section.');
+      }
+      if (!hasSection(/\bRisks?\b/i)) {
+        issues.push('Missing Risks section.');
+      }
+      return issues;
+    }
+
+    if (!hasSection(/Acceptance\s+Criteria/i)) {
+      issues.push('Missing Acceptance Criteria section.');
+    }
+    if (!hasSection(/Verification|Test\s+Strategy/i)) {
+      issues.push('Missing Verification/Test Strategy section.');
+    }
+    if (!hasSection(/Security|Privacy|Auth/i)) {
+      issues.push('Missing Security/Privacy considerations.');
+    }
+    if (!hasSection(/Performance|Scalability|Latency/i)) {
+      issues.push('Missing Performance/Scalability considerations.');
+    }
+    if (!hasSection(/UX|User\s+Experience|Loading|Empty\s+State|Error\s+State/i)) {
+      issues.push('Missing UX states (loading/error/empty).');
+    }
+    if (!hasSection(/Schema|Contract|API|Validation/i)) {
+      issues.push('Missing Data/Contract alignment section.');
+    }
+
+    const tasks = parseTasksFromSpec(planContent);
+    if (tasks.length === 0) {
+      issues.push('Missing tasks block.');
+    } else if (tasks.length < 3) {
+      issues.push('Too few tasks for the scope.');
+    }
+
+    return issues;
+  }
+
+  private async revisePlanForQuality(options: {
+    featureId: string;
+    projectPath: string;
+    planningMode: PlanningMode;
+    currentPlanContent: string;
+    issues: string[];
+    plannerProvider: BaseProvider;
+    plannerBareModel: string;
+    plannerSdkOptions: {
+      maxTurns?: number;
+      systemPrompt?: ExecuteOptions['systemPrompt'];
+      settingSources?: ExecuteOptions['settingSources'];
+    };
+    plannerThinkingLevel?: ThinkingLevel;
+    plannerReasoningEffort?: ReasoningEffort;
+    workDir: string;
+    abortController: AbortController;
+    allowedTools?: string[] | undefined;
+    mcpServers?: ExecuteOptions['mcpServers'];
+  }): Promise<{ planContent: string; rawText: string } | null> {
+    const issueList = options.issues.map((issue) => `- ${issue}`).join('\n');
+    const formatHint =
+      options.planningMode === 'lite'
+        ? 'Use the lite planning outline format (Goal, Approach, Files to Touch, Tasks, Risks).'
+        : 'Use the specification format with a ```tasks``` block and required sections.';
+
+    const revisionPrompt = `The plan/specification failed quality gates.
+
+Missing items:
+${issueList}
+
+Current plan/specification:
+${options.currentPlanContent}
+
+Revise the plan/specification to address ALL missing items while preserving scope.
+${formatHint}
+
+After generating the revised plan, output:
+"[SPEC_GENERATED] Please review the revised specification above."
+`;
+
+    const revisionStream = options.plannerProvider.executeQuery({
+      prompt: revisionPrompt,
+      model: options.plannerBareModel,
+      maxTurns: options.plannerSdkOptions.maxTurns || 120,
+      cwd: options.workDir,
+      allowedTools: options.allowedTools,
+      abortController: options.abortController,
+      systemPrompt: options.plannerSdkOptions.systemPrompt,
+      settingSources: options.plannerSdkOptions.settingSources,
+      thinkingLevel: options.plannerThinkingLevel,
+      reasoningEffort: options.plannerReasoningEffort,
+      mcpServers: options.mcpServers,
+    });
+
+    let revisionText = '';
+    for await (const msg of revisionStream) {
+      if (msg.type === 'assistant' && msg.message?.content) {
+        for (const block of msg.message.content) {
+          if (block.type === 'text') {
+            revisionText += block.text || '';
+            this.emitAutoModeEvent('auto_mode_progress', {
+              featureId: options.featureId,
+              content: block.text,
+            });
+          }
+        }
+      } else if (msg.type === 'error') {
+        throw new Error(msg.error || 'Error during plan quality revision');
+      } else if (msg.type === 'result' && msg.subtype === 'success') {
+        revisionText += msg.result || '';
+      }
+    }
+
+    const markerIndex = revisionText.indexOf('[SPEC_GENERATED]');
+    const revisedContent =
+      markerIndex > 0 ? revisionText.substring(0, markerIndex).trim() : revisionText.trim();
+
+    if (!revisedContent) {
+      return null;
+    }
+
+    return { planContent: revisedContent, rawText: revisionText };
+  }
+
+  private combineSystemPrompts(basePrompt?: string, rolePrompt?: string): string | undefined {
+    const parts = [basePrompt?.trim(), rolePrompt?.trim()].filter((part): part is string =>
+      Boolean(part && part.length > 0)
+    );
+    if (parts.length === 0) {
+      return undefined;
+    }
+    return parts.join('\n\n---\n\n');
+  }
+
+  private async resolveRoleModels(feature: Feature): Promise<Record<string, RoleModelConfig>> {
+    const settings = await this.settingsService?.getGlobalSettings();
+
+    const plannerEntry = settings?.phaseModels?.plannerModel || DEFAULT_PHASE_MODELS.plannerModel;
+    const workerEntry = settings?.phaseModels?.workerModel || DEFAULT_PHASE_MODELS.workerModel;
+    const judgeEntry = settings?.phaseModels?.judgeModel || DEFAULT_PHASE_MODELS.judgeModel;
+    const refactorEntry =
+      settings?.phaseModels?.refactorModel || DEFAULT_PHASE_MODELS.refactorModel;
+
+    const resolvedPlanner = resolvePhaseModel(plannerEntry);
+    const resolvedWorker = resolvePhaseModel(workerEntry);
+    const resolvedJudge = resolvePhaseModel(judgeEntry);
+    const resolvedRefactor = resolvePhaseModel(refactorEntry);
+
+    const workerModel: RoleModelConfig = {
+      model: resolvedWorker.model,
+      thinkingLevel: resolvedWorker.thinkingLevel,
+      reasoningEffort: resolvedWorker.reasoningEffort,
+    };
+
+    if (feature.model) {
+      workerModel.model = resolveModelString(feature.model, workerModel.model);
+    }
+    if (feature.thinkingLevel) {
+      workerModel.thinkingLevel = feature.thinkingLevel;
+    }
+    if (feature.reasoningEffort) {
+      workerModel.reasoningEffort = feature.reasoningEffort;
+    }
+
+    return {
+      planner: {
+        model: resolvedPlanner.model,
+        thinkingLevel: resolvedPlanner.thinkingLevel,
+        reasoningEffort: resolvedPlanner.reasoningEffort,
+      },
+      worker: workerModel,
+      judge: {
+        model: resolvedJudge.model,
+        thinkingLevel: resolvedJudge.thinkingLevel,
+        reasoningEffort: resolvedJudge.reasoningEffort,
+      },
+      refactor: {
+        model: resolvedRefactor.model,
+        thinkingLevel: resolvedRefactor.thinkingLevel,
+        reasoningEffort: resolvedRefactor.reasoningEffort,
+      },
+    };
   }
 
   private buildFeaturePrompt(feature: Feature): string {
@@ -2031,19 +3211,34 @@ This helps parse your summary correctly in the output logs.`;
       systemPrompt?: string;
       autoLoadClaudeMd?: boolean;
       thinkingLevel?: ThinkingLevel;
+      reasoningEffort?: ReasoningEffort;
+      roleModels?: Record<string, RoleModelConfig>;
+      rolePrompts?: RolePromptConfig;
     }
   ): Promise<void> {
     const finalProjectPath = options?.projectPath || projectPath;
     const planningMode = options?.planningMode || 'skip';
     const previousContent = options?.previousContent;
+    const roleModels = options?.roleModels || {};
+    const rolePrompts = options?.rolePrompts || {};
+
+    const workerRole = roleModels.worker;
+    const workerModel = workerRole?.model || model || DEFAULT_MODELS.cursor;
+    const workerThinkingLevel = workerRole?.thinkingLevel ?? options?.thinkingLevel;
+    const workerReasoningEffort = workerRole?.reasoningEffort ?? options?.reasoningEffort;
+
+    const plannerRole = roleModels.planner;
+    const plannerModel = plannerRole?.model || workerModel;
+    const plannerThinkingLevel = plannerRole?.thinkingLevel;
+    const plannerReasoningEffort = plannerRole?.reasoningEffort;
 
     // Validate vision support before processing images
-    const effectiveModel = model || 'claude-sonnet-4-20250514';
+    const initialVisionModel = planningMode === 'skip' ? workerModel : plannerModel;
     if (imagePaths && imagePaths.length > 0) {
-      const supportsVision = ProviderFactory.modelSupportsVision(effectiveModel);
+      const supportsVision = ProviderFactory.modelSupportsVision(initialVisionModel);
       if (!supportsVision) {
         throw new Error(
-          `This model (${effectiveModel}) does not support image input. ` +
+          `This model (${initialVisionModel}) does not support image input. ` +
             `Please switch to a model that supports vision (like Claude models), or remove the images and try again.`
         );
       }
@@ -2127,33 +3322,40 @@ This mock response was generated because AUTOMAKER_MOCK_AGENT=true was set.
 
     // Load MCP permission settings (global setting only)
 
+    const workerSystemPrompt = this.combineSystemPrompts(options?.systemPrompt, rolePrompts.worker);
+    const plannerSystemPrompt = this.combineSystemPrompts(
+      options?.systemPrompt,
+      rolePrompts.planner
+    );
+
     // Build SDK options using centralized configuration for feature implementation
-    const sdkOptions = createAutoModeOptions({
+    const workerSdkOptions = createAutoModeOptions({
       cwd: workDir,
-      model: model,
+      model: workerModel,
       abortController,
       autoLoadClaudeMd,
       mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
-      thinkingLevel: options?.thinkingLevel,
+      thinkingLevel: workerThinkingLevel,
+      systemPrompt: workerSystemPrompt,
+    });
+
+    const plannerSdkOptions = createAutoModeOptions({
+      cwd: workDir,
+      model: plannerModel,
+      abortController,
+      autoLoadClaudeMd,
+      mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
+      thinkingLevel: plannerThinkingLevel,
+      systemPrompt: plannerSystemPrompt,
     });
 
     // Extract model, maxTurns, and allowedTools from SDK options
-    const finalModel = sdkOptions.model!;
-    const maxTurns = sdkOptions.maxTurns;
-    const allowedTools = sdkOptions.allowedTools as string[] | undefined;
+    const workerFinalModel = workerSdkOptions.model!;
+    const plannerFinalModel = plannerSdkOptions.model!;
+    const allowedTools = workerSdkOptions.allowedTools as string[] | undefined;
 
     logger.info(
-      `runAgent called for feature ${featureId} with model: ${finalModel}, planningMode: ${planningMode}, requiresApproval: ${requiresApproval}`
-    );
-
-    // Get provider for this model
-    const provider = ProviderFactory.getProviderForModel(finalModel);
-
-    // Strip provider prefix - providers should receive bare model IDs
-    const bareModel = stripProviderPrefix(finalModel);
-
-    logger.info(
-      `Using provider "${provider.getName()}" for model "${finalModel}" (bare: ${bareModel})`
+      `runAgent called for feature ${featureId} with planner model: ${plannerFinalModel}, worker model: ${workerFinalModel}, planningMode: ${planningMode}, requiresApproval: ${requiresApproval}`
     );
 
     // Build prompt content with images using utility
@@ -2171,22 +3373,47 @@ This mock response was generated because AUTOMAKER_MOCK_AGENT=true was set.
       );
     }
 
+    const resolveProviderForModel = (resolvedModel: string) => ({
+      provider: ProviderFactory.getProviderForModel(resolvedModel),
+      bareModel: stripProviderPrefix(resolvedModel),
+    });
+
+    const { provider: plannerProvider, bareModel: plannerBareModel } =
+      resolveProviderForModel(plannerFinalModel);
+    const { provider: workerProvider, bareModel: workerBareModel } =
+      resolveProviderForModel(workerFinalModel);
+
+    const initialRole = planningMode === 'skip' ? 'worker' : 'planner';
+    const initialModel = planningMode === 'skip' ? workerFinalModel : plannerFinalModel;
+    const initialSdkOptions = planningMode === 'skip' ? workerSdkOptions : plannerSdkOptions;
+    const initialThinkingLevel =
+      planningMode === 'skip' ? workerThinkingLevel : plannerThinkingLevel;
+    const initialReasoningEffort =
+      planningMode === 'skip' ? workerReasoningEffort : plannerReasoningEffort;
+    const initialProvider = planningMode === 'skip' ? workerProvider : plannerProvider;
+    const initialBareModel = planningMode === 'skip' ? workerBareModel : plannerBareModel;
+
+    logger.info(
+      `Using provider "${initialProvider.getName()}" for ${initialRole} model "${initialModel}" (bare: ${initialBareModel})`
+    );
+
     const executeOptions: ExecuteOptions = {
       prompt: promptContent,
-      model: bareModel,
-      maxTurns: maxTurns,
+      model: initialBareModel,
+      maxTurns: initialSdkOptions.maxTurns,
       cwd: workDir,
       allowedTools: allowedTools,
       abortController,
-      systemPrompt: sdkOptions.systemPrompt,
-      settingSources: sdkOptions.settingSources,
+      systemPrompt: initialSdkOptions.systemPrompt,
+      settingSources: initialSdkOptions.settingSources,
       mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined, // Pass MCP servers configuration
-      thinkingLevel: options?.thinkingLevel, // Pass thinking level for extended thinking
+      thinkingLevel: initialThinkingLevel,
+      reasoningEffort: initialReasoningEffort,
     };
 
     // Execute via provider
     logger.info(`Starting stream for feature ${featureId}...`);
-    const stream = provider.executeQuery(executeOptions);
+    const stream = initialProvider.executeQuery(executeOptions);
     logger.info(`Stream created, starting to iterate...`);
     // Initialize with previous content if this is a follow-up, with a separator
     let responseText = previousContent
@@ -2340,12 +3567,63 @@ This mock response was generated because AUTOMAKER_MOCK_AGENT=true was set.
 
                 // Extract plan content (everything before the marker)
                 const markerIndex = responseText.indexOf('[SPEC_GENERATED]');
-                const planContent = responseText.substring(0, markerIndex).trim();
+                let currentPlanContent = responseText.substring(0, markerIndex).trim();
 
                 // Parse tasks from the generated spec (for spec and full modes)
                 // Use let since we may need to update this after plan revision
-                let parsedTasks = parseTasksFromSpec(planContent);
-                const tasksTotal = parsedTasks.length;
+                let parsedTasks = parseTasksFromSpec(currentPlanContent);
+                let tasksTotal = parsedTasks.length;
+
+                let qualityIssues = this.getPlanQualityIssues(currentPlanContent, planningMode);
+                let qualityRevisionCount = 0;
+
+                while (
+                  qualityIssues.length > 0 &&
+                  qualityRevisionCount < MAX_PLAN_QUALITY_REVISIONS
+                ) {
+                  this.emitAutoModeEvent('plan_quality_gate_failed', {
+                    featureId,
+                    projectPath,
+                    issues: qualityIssues,
+                    attempt: qualityRevisionCount + 1,
+                  });
+
+                  const revisionResult = await this.revisePlanForQuality({
+                    featureId,
+                    projectPath,
+                    planningMode,
+                    currentPlanContent,
+                    issues: qualityIssues,
+                    plannerProvider,
+                    plannerBareModel,
+                    plannerSdkOptions: {
+                      maxTurns: plannerSdkOptions.maxTurns,
+                      systemPrompt: plannerSdkOptions.systemPrompt,
+                      settingSources: plannerSdkOptions.settingSources,
+                    },
+                    plannerThinkingLevel,
+                    plannerReasoningEffort,
+                    workDir,
+                    abortController,
+                    allowedTools,
+                    mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
+                  });
+
+                  if (!revisionResult) {
+                    break;
+                  }
+
+                  currentPlanContent = revisionResult.planContent;
+                  responseText += revisionResult.rawText;
+                  scheduleWrite();
+
+                  parsedTasks = parseTasksFromSpec(currentPlanContent);
+                  tasksTotal = parsedTasks.length;
+                  qualityIssues = this.getPlanQualityIssues(currentPlanContent, planningMode);
+                  qualityRevisionCount += 1;
+                }
+
+                const qualityGatePassed = qualityIssues.length === 0;
 
                 logger.info(`Parsed ${tasksTotal} tasks from spec for feature ${featureId}`);
                 if (parsedTasks.length > 0) {
@@ -2355,19 +3633,19 @@ This mock response was generated because AUTOMAKER_MOCK_AGENT=true was set.
                 // Update planSpec status to 'generated' and save content with parsed tasks
                 await this.updateFeaturePlanSpec(projectPath, featureId, {
                   status: 'generated',
-                  content: planContent,
-                  version: 1,
+                  content: currentPlanContent,
+                  version: 1 + qualityRevisionCount,
                   generatedAt: new Date().toISOString(),
                   reviewedByUser: false,
                   tasks: parsedTasks,
                   tasksTotal,
                   tasksCompleted: 0,
+                  qualityIssues: qualityGatePassed ? [] : qualityIssues,
                 });
 
-                let approvedPlanContent = planContent;
+                let approvedPlanContent = currentPlanContent;
                 let userFeedback: string | undefined;
-                let currentPlanContent = planContent;
-                let planVersion = 1;
+                let planVersion = 1 + qualityRevisionCount;
 
                 // Only pause for approval if requirePlanApproval is true
                 if (requiresApproval) {
@@ -2476,13 +3754,17 @@ After generating the revised spec, output:
                         });
 
                         // Make revision call
-                        const revisionStream = provider.executeQuery({
+                        const revisionStream = plannerProvider.executeQuery({
                           prompt: revisionPrompt,
-                          model: bareModel,
-                          maxTurns: maxTurns || 100,
+                          model: plannerBareModel,
+                          maxTurns: plannerSdkOptions.maxTurns || 100,
                           cwd: workDir,
                           allowedTools: allowedTools,
                           abortController,
+                          systemPrompt: plannerSdkOptions.systemPrompt,
+                          settingSources: plannerSdkOptions.settingSources,
+                          thinkingLevel: plannerThinkingLevel,
+                          reasoningEffort: plannerReasoningEffort,
                           mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
                         });
 
@@ -2549,11 +3831,11 @@ After generating the revised spec, output:
                   this.emitAutoModeEvent('plan_auto_approved', {
                     featureId,
                     projectPath,
-                    planContent,
+                    planContent: currentPlanContent,
                     planningMode,
                   });
 
-                  approvedPlanContent = planContent;
+                  approvedPlanContent = currentPlanContent;
                 }
 
                 // CRITICAL: After approval, we need to make a second call to continue implementation
@@ -2576,114 +3858,77 @@ After generating the revised spec, output:
 
                 if (parsedTasks.length > 0) {
                   logger.info(
-                    `Starting multi-agent execution: ${parsedTasks.length} tasks for feature ${featureId}`
+                    `Starting dependency-aware execution: ${parsedTasks.length} tasks for feature ${featureId}`
                   );
 
-                  // Execute each task with a separate agent
-                  for (let taskIndex = 0; taskIndex < parsedTasks.length; taskIndex++) {
-                    const task = parsedTasks[taskIndex];
+                  let refinementPass = 0;
+                  while (this.shouldRefineTasks(parsedTasks, refinementPass)) {
+                    this.emitAutoModeEvent('auto_mode_progress', {
+                      featureId,
+                      content: `Refining plan with sub-planner (pass ${refinementPass + 1})...`,
+                    });
 
-                    // Check for abort
-                    if (abortController.signal.aborted) {
-                      throw new Error('Feature execution aborted');
-                    }
-
-                    // Emit task started
-                    logger.info(`Starting task ${task.id}: ${task.description}`);
-                    this.emitAutoModeEvent('auto_mode_task_started', {
+                    const refinedTasks = await this.refineTasksWithSubPlanner({
                       featureId,
                       projectPath,
-                      taskId: task.id,
-                      taskDescription: task.description,
-                      taskIndex,
-                      tasksTotal: parsedTasks.length,
-                    });
-
-                    // Update planSpec with current task
-                    await this.updateFeaturePlanSpec(projectPath, featureId, {
-                      currentTaskId: task.id,
-                    });
-
-                    // Build focused prompt for this specific task
-                    const taskPrompt = this.buildTaskPrompt(
-                      task,
-                      parsedTasks,
-                      taskIndex,
-                      approvedPlanContent,
-                      userFeedback
-                    );
-
-                    // Execute task with dedicated agent
-                    const taskStream = provider.executeQuery({
-                      prompt: taskPrompt,
-                      model: bareModel,
-                      maxTurns: Math.min(maxTurns || 100, 50), // Limit turns per task
-                      cwd: workDir,
-                      allowedTools: allowedTools,
+                      tasks: parsedTasks,
+                      planContent: approvedPlanContent,
+                      plannerProvider,
+                      plannerBareModel,
+                      plannerSdkOptions: {
+                        maxTurns: plannerSdkOptions.maxTurns,
+                        systemPrompt: plannerSdkOptions.systemPrompt,
+                        settingSources: plannerSdkOptions.settingSources,
+                      },
+                      plannerThinkingLevel,
+                      plannerReasoningEffort,
+                      workDir,
                       abortController,
+                      allowedTools,
                       mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
                     });
 
-                    let taskOutput = '';
-
-                    // Process task stream
-                    for await (const msg of taskStream) {
-                      if (msg.type === 'assistant' && msg.message?.content) {
-                        for (const block of msg.message.content) {
-                          if (block.type === 'text') {
-                            taskOutput += block.text || '';
-                            responseText += block.text || '';
-                            this.emitAutoModeEvent('auto_mode_progress', {
-                              featureId,
-                              content: block.text,
-                            });
-                          } else if (block.type === 'tool_use') {
-                            this.emitAutoModeEvent('auto_mode_tool', {
-                              featureId,
-                              tool: block.name,
-                              input: block.input,
-                            });
-                          }
-                        }
-                      } else if (msg.type === 'error') {
-                        throw new Error(msg.error || `Error during task ${task.id}`);
-                      } else if (msg.type === 'result' && msg.subtype === 'success') {
-                        taskOutput += msg.result || '';
-                        responseText += msg.result || '';
-                      }
+                    if (!refinedTasks || refinedTasks.length <= parsedTasks.length) {
+                      break;
                     }
 
-                    // Emit task completed
-                    logger.info(`Task ${task.id} completed for feature ${featureId}`);
-                    this.emitAutoModeEvent('auto_mode_task_complete', {
-                      featureId,
-                      projectPath,
-                      taskId: task.id,
-                      tasksCompleted: taskIndex + 1,
-                      tasksTotal: parsedTasks.length,
-                    });
+                    parsedTasks = refinedTasks;
+                    refinementPass += 1;
 
-                    // Update planSpec with progress
                     await this.updateFeaturePlanSpec(projectPath, featureId, {
-                      tasksCompleted: taskIndex + 1,
+                      tasks: parsedTasks,
+                      tasksTotal: parsedTasks.length,
+                      tasksCompleted: 0,
+                      currentTaskId: undefined,
+                      currentTaskIds: [],
                     });
-
-                    // Check for phase completion (group tasks by phase)
-                    if (task.phase) {
-                      const nextTask = parsedTasks[taskIndex + 1];
-                      if (!nextTask || nextTask.phase !== task.phase) {
-                        // Phase changed, emit phase complete
-                        const phaseMatch = task.phase.match(/Phase\s*(\d+)/i);
-                        if (phaseMatch) {
-                          this.emitAutoModeEvent('auto_mode_phase_complete', {
-                            featureId,
-                            projectPath,
-                            phaseNumber: parseInt(phaseMatch[1], 10),
-                          });
-                        }
-                      }
-                    }
                   }
+
+                  await this.executeTasksWithDependencies({
+                    projectPath,
+                    featureId,
+                    workDir,
+                    tasks: parsedTasks,
+                    planContent: approvedPlanContent,
+                    userFeedback,
+                    workerProvider,
+                    workerBareModel,
+                    workerSdkOptions: {
+                      maxTurns: workerSdkOptions.maxTurns,
+                      systemPrompt: workerSdkOptions.systemPrompt,
+                      settingSources: workerSdkOptions.settingSources,
+                    },
+                    workerThinkingLevel,
+                    workerReasoningEffort,
+                    allowedTools,
+                    abortController,
+                    mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
+                    appendOutput: (text) => {
+                      if (!text) return;
+                      responseText += text;
+                      scheduleWrite();
+                    },
+                  });
 
                   logger.info(`All ${parsedTasks.length} tasks completed for feature ${featureId}`);
                 } else {
@@ -2702,13 +3947,17 @@ ${approvedPlanContent}
 
 Implement all the changes described in the plan above.`;
 
-                  const continuationStream = provider.executeQuery({
+                  const continuationStream = workerProvider.executeQuery({
                     prompt: continuationPrompt,
-                    model: bareModel,
-                    maxTurns: maxTurns,
+                    model: workerBareModel,
+                    maxTurns: workerSdkOptions.maxTurns,
                     cwd: workDir,
                     allowedTools: allowedTools,
                     abortController,
+                    systemPrompt: workerSdkOptions.systemPrompt,
+                    settingSources: workerSdkOptions.settingSources,
+                    thinkingLevel: workerThinkingLevel,
+                    reasoningEffort: workerReasoningEffort,
                     mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
                   });
 
@@ -2861,6 +4110,8 @@ You are executing a specific task as part of a larger feature implementation.
 **Description:** ${task.description}
 ${task.filePath ? `**Primary File:** ${task.filePath}` : ''}
 ${task.phase ? `**Phase:** ${task.phase}` : ''}
+${task.dependsOn ? `**Depends On:** ${task.dependsOn.join(', ')}` : ''}
+${task.complexity ? `**Complexity:** ${task.complexity}` : ''}
 
 ## Context
 
@@ -2907,9 +4158,346 @@ ${planContent}
 3. Use the existing codebase patterns
 4. When done, summarize what you implemented
 
-Begin implementing task ${task.id} now.`;
+    Begin implementing task ${task.id} now.`;
 
     return prompt;
+  }
+
+  private shouldRefineTasks(tasks: ParsedTask[], pass: number): boolean {
+    if (pass >= MAX_SUBPLANNING_PASSES) {
+      return false;
+    }
+
+    const weights: Record<PlanTaskComplexity, number> = {
+      low: 1,
+      medium: 2,
+      high: 3,
+    };
+
+    const complexityScore = tasks.reduce((score, task) => {
+      const complexity = task.complexity || 'medium';
+      return score + weights[complexity];
+    }, 0);
+    const highCount = tasks.filter((task) => task.complexity === 'high').length;
+
+    return (
+      tasks.length >= TASK_REFINEMENT_COUNT_THRESHOLD ||
+      complexityScore >= TASK_REFINEMENT_SCORE_THRESHOLD ||
+      highCount >= 2
+    );
+  }
+
+  private async refineTasksWithSubPlanner(options: {
+    featureId: string;
+    projectPath: string;
+    tasks: ParsedTask[];
+    planContent: string;
+    plannerProvider: BaseProvider;
+    plannerBareModel: string;
+    plannerSdkOptions: {
+      maxTurns?: number;
+      systemPrompt?: ExecuteOptions['systemPrompt'];
+      settingSources?: ExecuteOptions['settingSources'];
+    };
+    plannerThinkingLevel?: ThinkingLevel;
+    plannerReasoningEffort?: ReasoningEffort;
+    workDir: string;
+    abortController: AbortController;
+    allowedTools?: string[];
+    mcpServers?: ExecuteOptions['mcpServers'];
+  }): Promise<ParsedTask[] | null> {
+    const taskSummary = options.tasks
+      .map((task) => {
+        const deps = task.dependsOn?.length ? ` deps: ${task.dependsOn.join(', ')}` : '';
+        const file = task.filePath ? ` file: ${task.filePath}` : '';
+        const complexity = task.complexity ? ` complexity: ${task.complexity}` : '';
+        return `- ${task.id}: ${task.description}${file}${deps}${complexity}`;
+      })
+      .join('\n');
+
+    const subPlanPrompt = `You are a sub-planner. Refine the task list into smaller, executable tasks with clear dependencies.
+
+Rules:
+- Output ONLY a \`\`\`tasks\`\`\` block (no other text).
+- Use sequential IDs (T001, T002, ...).
+- Include File, DependsOn (optional), and Complexity (optional) fields.
+- Keep scope identical; do not add new features.
+
+## Original Plan Context
+${options.planContent}
+
+## Current Tasks
+${taskSummary}
+
+Return ONLY the refined tasks block.`;
+
+    const stream = options.plannerProvider.executeQuery({
+      prompt: subPlanPrompt,
+      model: options.plannerBareModel,
+      maxTurns: options.plannerSdkOptions.maxTurns || 120,
+      cwd: options.workDir,
+      allowedTools: options.allowedTools,
+      abortController: options.abortController,
+      systemPrompt: options.plannerSdkOptions.systemPrompt,
+      settingSources: options.plannerSdkOptions.settingSources,
+      thinkingLevel: options.plannerThinkingLevel,
+      reasoningEffort: options.plannerReasoningEffort,
+      mcpServers: options.mcpServers,
+    });
+
+    let responseText = '';
+    for await (const msg of stream) {
+      if (msg.type === 'assistant' && msg.message?.content) {
+        for (const block of msg.message.content) {
+          if (block.type === 'text') {
+            responseText += block.text || '';
+          }
+        }
+      } else if (msg.type === 'result' && msg.subtype === 'success') {
+        responseText += msg.result || '';
+      } else if (msg.type === 'error') {
+        throw new Error(msg.error || 'Error during sub-planning');
+      }
+    }
+
+    const refinedTasks = parseTasksFromSpec(responseText);
+    return refinedTasks.length > 0 ? refinedTasks : null;
+  }
+
+  private async executeTasksWithDependencies(options: {
+    projectPath: string;
+    featureId: string;
+    workDir: string;
+    tasks: ParsedTask[];
+    planContent: string;
+    userFeedback?: string;
+    workerProvider: BaseProvider;
+    workerBareModel: string;
+    workerSdkOptions: {
+      maxTurns?: number;
+      systemPrompt?: ExecuteOptions['systemPrompt'];
+      settingSources?: ExecuteOptions['settingSources'];
+    };
+    workerThinkingLevel?: ThinkingLevel;
+    workerReasoningEffort?: ReasoningEffort;
+    allowedTools?: string[];
+    abortController: AbortController;
+    mcpServers?: ExecuteOptions['mcpServers'];
+    appendOutput: (text: string) => void;
+  }): Promise<void> {
+    const settings = await this.settingsService?.getGlobalSettings();
+    const maxTaskConcurrency = Math.max(
+      1,
+      Math.min(settings?.maxConcurrency ?? DEFAULT_MAX_TASK_CONCURRENCY, MAX_TASK_CONCURRENCY_CAP)
+    );
+
+    const tasks = options.tasks;
+    const taskMap = new Map(tasks.map((task) => [task.id, task]));
+    const taskOrder = new Map(tasks.map((task, index) => [task.id, index]));
+
+    const missingDependencies = new Map<string, string[]>();
+
+    for (const task of tasks) {
+      task.status = task.status || 'pending';
+      if (task.dependsOn && task.dependsOn.length > 0) {
+        const missing = task.dependsOn.filter((depId) => !taskMap.has(depId));
+        if (missing.length > 0) {
+          missingDependencies.set(task.id, missing);
+          task.status = 'blocked';
+        }
+      }
+    }
+
+    const syncPlanSpec = async (): Promise<void> => {
+      const inProgressIds = tasks
+        .filter((task) => task.status === 'in_progress')
+        .map((task) => task.id);
+      const completedCount = tasks.filter((task) => task.status === 'completed').length;
+      await this.updatePlanSpecWithRetry(options.projectPath, options.featureId, (planSpec) => ({
+        ...planSpec,
+        tasks: tasks,
+        tasksCompleted: completedCount,
+        tasksTotal: tasks.length,
+        currentTaskId: inProgressIds[0],
+        currentTaskIds: inProgressIds,
+      }));
+    };
+
+    if (missingDependencies.size > 0) {
+      logger.warn(
+        `Task dependency issues for ${options.featureId}: ` +
+          Array.from(missingDependencies.entries())
+            .map(([taskId, deps]) => `${taskId} missing ${deps.join(', ')}`)
+            .join('; ')
+      );
+      await syncPlanSpec();
+    }
+
+    const isReady = (task: ParsedTask): boolean => {
+      if (task.status !== 'pending') {
+        return false;
+      }
+      const deps = task.dependsOn || [];
+      return deps.every((depId) => taskMap.get(depId)?.status === 'completed');
+    };
+
+    const readyQueue: ParsedTask[] = tasks.filter((task) => isReady(task));
+    const inFlight = new Map<string, Promise<{ id: string; status: 'completed' | 'failed' }>>();
+    let hadFailure = false;
+
+    const scheduleTask = async (task: ParsedTask) => {
+      task.status = 'in_progress';
+      await syncPlanSpec();
+
+      this.emitAutoModeEvent('auto_mode_task_started', {
+        featureId: options.featureId,
+        projectPath: options.projectPath,
+        taskId: task.id,
+        taskDescription: task.description,
+        taskIndex: taskOrder.get(task.id) ?? 0,
+        tasksTotal: tasks.length,
+      });
+
+      const taskPrompt = this.buildTaskPrompt(
+        task,
+        tasks,
+        taskOrder.get(task.id) ?? 0,
+        options.planContent,
+        options.userFeedback
+      );
+
+      const taskPromise = (async () => {
+        const taskStream = options.workerProvider.executeQuery({
+          prompt: taskPrompt,
+          model: options.workerBareModel,
+          maxTurns: Math.min(options.workerSdkOptions.maxTurns || 100, 50),
+          cwd: options.workDir,
+          allowedTools: options.allowedTools,
+          abortController: options.abortController,
+          systemPrompt: options.workerSdkOptions.systemPrompt,
+          settingSources: options.workerSdkOptions.settingSources,
+          thinkingLevel: options.workerThinkingLevel,
+          reasoningEffort: options.workerReasoningEffort,
+          mcpServers: options.mcpServers,
+        });
+
+        for await (const msg of taskStream) {
+          if (msg.type === 'assistant' && msg.message?.content) {
+            for (const block of msg.message.content) {
+              if (block.type === 'text') {
+                const text = block.text || '';
+                if (text) {
+                  options.appendOutput(text);
+                  this.emitAutoModeEvent('auto_mode_progress', {
+                    featureId: options.featureId,
+                    content: text,
+                  });
+                }
+              } else if (block.type === 'tool_use') {
+                this.emitAutoModeEvent('auto_mode_tool', {
+                  featureId: options.featureId,
+                  tool: block.name,
+                  input: block.input,
+                });
+              }
+            }
+          } else if (msg.type === 'error') {
+            throw new Error(msg.error || `Error during task ${task.id}`);
+          } else if (msg.type === 'result' && msg.subtype === 'success') {
+            if (msg.result) {
+              options.appendOutput(msg.result);
+            }
+          }
+        }
+
+        return { id: task.id, status: 'completed' as const };
+      })().catch((error) => {
+        logger.error(`Task ${task.id} failed:`, error);
+        return { id: task.id, status: 'failed' as const };
+      });
+
+      inFlight.set(task.id, taskPromise);
+      taskPromise.finally(() => inFlight.delete(task.id));
+    };
+
+    while (true) {
+      if (options.abortController.signal.aborted) {
+        throw new Error('Feature execution aborted');
+      }
+      while (!hadFailure && inFlight.size < maxTaskConcurrency && readyQueue.length > 0) {
+        const nextTask = readyQueue.shift();
+        if (nextTask) {
+          await scheduleTask(nextTask);
+        }
+      }
+
+      if (inFlight.size === 0) {
+        break;
+      }
+
+      const result = await Promise.race(inFlight.values());
+      const finishedTask = taskMap.get(result.id);
+      if (!finishedTask) {
+        continue;
+      }
+
+      if (result.status === 'completed') {
+        finishedTask.status = 'completed';
+        this.emitAutoModeEvent('auto_mode_task_complete', {
+          featureId: options.featureId,
+          projectPath: options.projectPath,
+          taskId: finishedTask.id,
+          tasksCompleted: tasks.filter((task) => task.status === 'completed').length,
+          tasksTotal: tasks.length,
+        });
+      } else {
+        finishedTask.status = 'failed';
+        hadFailure = true;
+      }
+
+      await syncPlanSpec();
+
+      if (!hadFailure) {
+        for (const task of tasks) {
+          if (isReady(task) && !readyQueue.includes(task) && !inFlight.has(task.id)) {
+            readyQueue.push(task);
+          }
+        }
+
+        if (finishedTask.phase) {
+          const phaseTasks = tasks.filter((task) => task.phase === finishedTask.phase);
+          if (phaseTasks.length > 0 && phaseTasks.every((task) => task.status === 'completed')) {
+            const phaseMatch = finishedTask.phase.match(/Phase\s*(\d+)/i);
+            if (phaseMatch) {
+              this.emitAutoModeEvent('auto_mode_phase_complete', {
+                featureId: options.featureId,
+                projectPath: options.projectPath,
+                phaseNumber: parseInt(phaseMatch[1], 10),
+              });
+            }
+          }
+        }
+      }
+    }
+
+    if (hadFailure) {
+      for (const task of tasks) {
+        if (task.status === 'pending') {
+          task.status = 'blocked';
+        }
+      }
+      await syncPlanSpec();
+      throw new Error('One or more tasks failed during concurrent execution.');
+    }
+
+    const remaining = tasks.filter((task) => task.status === 'pending');
+    if (remaining.length > 0) {
+      for (const task of remaining) {
+        task.status = 'blocked';
+      }
+      await syncPlanSpec();
+      throw new Error('Task dependency cycle detected - pending tasks are blocked.');
+    }
   }
 
   /**
@@ -3098,6 +4686,79 @@ If nothing notable: {"learnings": []}`;
 
       // Valid learning types
       const validTypes = new Set(['decision', 'learning', 'pattern', 'gotcha']);
+      const createdAt = new Date().toISOString();
+      const relatedFeatures = Array.from(
+        new Set(
+          [feature.id, feature.title].filter((value): value is string =>
+            Boolean(value && value.trim())
+          )
+        )
+      );
+      const decisionsToRecord: ArchitecturalDecision[] = [];
+      const rejectedToRecord: RejectedApproach[] = [];
+      const patternsToRecord: CodePattern[] = [];
+      let testStrategyUpdate: TestingStrategy | undefined;
+
+      const normalizeText = (value: string): string => value.trim().replace(/\s+/g, ' ');
+      const normalizeKey = (value: string): string => normalizeText(value).toLowerCase();
+      const mergeRelatedFeatures = (existing: string[], incoming: string[]): string[] =>
+        Array.from(new Set([...(existing || []), ...incoming].filter(Boolean)));
+      const buildRationale = (input: {
+        why?: string;
+        context?: string;
+        tradeoffs?: string;
+        breaking?: string;
+      }): string => {
+        const parts: string[] = [];
+        if (input.why) {
+          parts.push(input.why);
+        } else if (input.context) {
+          parts.push(input.context);
+        }
+        if (input.tradeoffs) {
+          parts.push(`Tradeoffs: ${input.tradeoffs}`);
+        }
+        if (input.breaking) {
+          parts.push(`Breaks if changed: ${input.breaking}`);
+        }
+        return parts.join('; ');
+      };
+      const buildPatternName = (content: string): string => {
+        const firstSentence = content.split(/[.!?]/)[0].trim();
+        const candidate = firstSentence || content;
+        return candidate.slice(0, 60);
+      };
+      const splitRejected = (
+        rejected: string,
+        fallbackReason?: string
+      ): { approach: string; reason: string } => {
+        const separators = [' because ', ' due to ', ' since ', ' - ', ' — ', ' – '];
+        const lowered = rejected.toLowerCase();
+        for (const separator of separators) {
+          const index = lowered.indexOf(separator);
+          if (index > 0) {
+            return {
+              approach: rejected.slice(0, index).trim(),
+              reason: rejected.slice(index + separator.length).trim(),
+            };
+          }
+        }
+        return { approach: rejected.trim(), reason: fallbackReason?.trim() || '' };
+      };
+      const createMemoryKey = (prefix: string, seed: string, index: number): string => {
+        const slug = seed
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '');
+        const compactStamp = createdAt.replace(/[^0-9]/g, '');
+        return `${prefix}-${(slug || 'entry').slice(0, 40)}-${compactStamp}-${index}`;
+      };
+      const mergeNotes = (current?: string, next?: string): string | undefined => {
+        if (!current && !next) return undefined;
+        if (!current) return next;
+        if (!next || current.includes(next)) return current;
+        return `${current} ${next}`.trim();
+      };
 
       // Record each learning
       for (const item of parsed.learnings) {
@@ -3120,6 +4781,15 @@ If nothing notable: {"learnings": []}`;
         const learningType = validTypes.has(typeStr)
           ? (typeStr as 'decision' | 'learning' | 'pattern' | 'gotcha')
           : 'learning';
+        const content = learning.content.trim();
+        const context = typeof learning.context === 'string' ? learning.context.trim() : undefined;
+        const why = typeof learning.why === 'string' ? learning.why.trim() : undefined;
+        const rejected =
+          typeof learning.rejected === 'string' ? learning.rejected.trim() : undefined;
+        const tradeoffs =
+          typeof learning.tradeoffs === 'string' ? learning.tradeoffs.trim() : undefined;
+        const breaking =
+          typeof learning.breaking === 'string' ? learning.breaking.trim() : undefined;
 
         console.log(
           `[AutoMode] Appending learning: category=${learning.category}, type=${learningType}`
@@ -3129,14 +4799,150 @@ If nothing notable: {"learnings": []}`;
           {
             category: learning.category,
             type: learningType,
-            content: learning.content.trim(),
-            context: typeof learning.context === 'string' ? learning.context : undefined,
-            why: typeof learning.why === 'string' ? learning.why : undefined,
-            rejected: typeof learning.rejected === 'string' ? learning.rejected : undefined,
-            tradeoffs: typeof learning.tradeoffs === 'string' ? learning.tradeoffs : undefined,
-            breaking: typeof learning.breaking === 'string' ? learning.breaking : undefined,
+            content,
+            context,
+            why,
+            rejected,
+            tradeoffs,
+            breaking,
           },
           secureFs as Parameters<typeof appendLearning>[2]
+        );
+
+        if (learningType === 'decision') {
+          const rationale = buildRationale({ why, context, tradeoffs, breaking });
+          decisionsToRecord.push({
+            decision: content,
+            rationale: rationale || 'No rationale recorded.',
+            timestamp: createdAt,
+            relatedFeatures: relatedFeatures.slice(),
+          });
+        }
+
+        if (learningType === 'pattern') {
+          patternsToRecord.push({
+            name: buildPatternName(content),
+            description: content,
+            rationale: why || undefined,
+          });
+        }
+
+        if (rejected) {
+          const fallbackReason = why || tradeoffs || context || breaking;
+          const { approach, reason } = splitRejected(rejected, fallbackReason);
+          if (approach) {
+            rejectedToRecord.push({
+              approach,
+              reason: reason || 'No reason recorded.',
+              timestamp: createdAt,
+              relatedFeatures: relatedFeatures.slice(),
+            });
+          }
+        }
+
+        if (!testStrategyUpdate && learning.category.toLowerCase() === 'testing') {
+          const notes = buildRationale({ why, context, tradeoffs, breaking });
+          testStrategyUpdate = {
+            approach: content,
+            notes: notes || undefined,
+          };
+        }
+      }
+
+      if (
+        decisionsToRecord.length > 0 ||
+        rejectedToRecord.length > 0 ||
+        patternsToRecord.length > 0 ||
+        testStrategyUpdate
+      ) {
+        await updateArchitecturalMemory(
+          projectPath,
+          (memory) => {
+            const updated = {
+              ...memory,
+              decisions: { ...memory.decisions },
+              rejectedApproaches: { ...memory.rejectedApproaches },
+              patterns: [...memory.patterns],
+            };
+
+            let decisionIndex = 0;
+            for (const decision of decisionsToRecord) {
+              const existingKey = Object.keys(updated.decisions).find(
+                (key) =>
+                  normalizeKey(updated.decisions[key].decision) === normalizeKey(decision.decision)
+              );
+              if (existingKey) {
+                const existing = updated.decisions[existingKey];
+                updated.decisions[existingKey] = {
+                  ...existing,
+                  rationale: existing.rationale || decision.rationale,
+                  relatedFeatures: mergeRelatedFeatures(
+                    existing.relatedFeatures,
+                    decision.relatedFeatures
+                  ),
+                };
+              } else {
+                const key = createMemoryKey('decision', decision.decision, decisionIndex++);
+                updated.decisions[key] = decision;
+              }
+            }
+
+            let rejectedIndex = 0;
+            for (const rejected of rejectedToRecord) {
+              const existingKey = Object.keys(updated.rejectedApproaches).find(
+                (key) =>
+                  normalizeKey(updated.rejectedApproaches[key].approach) ===
+                  normalizeKey(rejected.approach)
+              );
+              if (existingKey) {
+                const existing = updated.rejectedApproaches[existingKey];
+                updated.rejectedApproaches[existingKey] = {
+                  ...existing,
+                  reason: existing.reason || rejected.reason,
+                  relatedFeatures: mergeRelatedFeatures(
+                    existing.relatedFeatures,
+                    rejected.relatedFeatures
+                  ),
+                };
+              } else {
+                const key = createMemoryKey('rejected', rejected.approach, rejectedIndex++);
+                updated.rejectedApproaches[key] = rejected;
+              }
+            }
+
+            for (const pattern of patternsToRecord) {
+              const existingIndex = updated.patterns.findIndex(
+                (entry) => normalizeKey(entry.name) === normalizeKey(pattern.name)
+              );
+              if (existingIndex === -1) {
+                updated.patterns.push(pattern);
+              } else {
+                const existing = updated.patterns[existingIndex];
+                updated.patterns[existingIndex] = {
+                  ...existing,
+                  rationale: existing.rationale || pattern.rationale,
+                };
+              }
+            }
+
+            if (testStrategyUpdate) {
+              if (!updated.testStrategy) {
+                updated.testStrategy = testStrategyUpdate;
+              } else {
+                updated.testStrategy = {
+                  ...updated.testStrategy,
+                  approach: updated.testStrategy.approach || testStrategyUpdate.approach,
+                  tools: updated.testStrategy.tools?.length
+                    ? updated.testStrategy.tools
+                    : testStrategyUpdate.tools,
+                  notes: mergeNotes(updated.testStrategy.notes, testStrategyUpdate.notes),
+                };
+              }
+            }
+
+            return updated;
+          },
+          secureFs as Parameters<typeof updateArchitecturalMemory>[2]
         );
       }
 

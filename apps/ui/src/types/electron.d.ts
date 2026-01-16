@@ -3,6 +3,12 @@
  */
 
 import type { ClaudeUsageResponse, CodexUsageResponse } from '@/store/app-store';
+import type {
+  AutoModeMetricsSnapshot,
+  AutoModeMetricsSummary,
+  AutoModeFeatureRunMetrics,
+  QualityGateResult,
+} from '@automaker/types';
 
 export interface ImageAttachment {
   id?: string; // Optional - may not be present in messages loaded from server
@@ -245,6 +251,13 @@ export type AutoModeEvent =
       planVersion?: number;
     }
   | {
+      type: 'plan_quality_gate_failed';
+      featureId: string;
+      projectPath?: string;
+      issues: string[];
+      attempt: number;
+    }
+  | {
       type: 'plan_auto_approved';
       featureId: string;
       projectPath?: string;
@@ -300,6 +313,27 @@ export type AutoModeEvent =
       featureId: string;
       projectPath?: string;
       phaseNumber: number;
+    }
+  | {
+      type: 'auto_mode_quality_metrics';
+      featureId: string;
+      projectPath?: string;
+      passed: boolean;
+      attempt: number;
+      checks: QualityGateResult[];
+    }
+  | {
+      type: 'auto_mode_judge_result';
+      featureId: string;
+      projectPath?: string;
+      verdict: 'pass' | 'revise' | 'fail';
+      issueCount: number;
+    }
+  | {
+      type: 'auto_mode_metrics_updated';
+      projectPath?: string;
+      summary: AutoModeMetricsSummary;
+      latestRun?: AutoModeFeatureRunMetrics;
     };
 
 export type SpecRegenerationEvent =
@@ -459,6 +493,12 @@ export interface AutoModeAPI {
     feedback?: string
   ) => Promise<{
     success: boolean;
+    error?: string;
+  }>;
+
+  metrics: (projectPath: string) => Promise<{
+    success: boolean;
+    metrics?: AutoModeMetricsSnapshot;
     error?: string;
   }>;
 
